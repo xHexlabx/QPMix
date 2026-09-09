@@ -9,6 +9,14 @@ import scipy.constants as sc
 from qpmix.circuit import EmbeddingCircuit, read_circuit
 
 
+def test_more_than_four_tones_is_allowed():
+    """The four-tone cap belongs to the multi-dimensional kernels, not to
+    the circuit; qpmix.multitone handles the rest."""
+    cct = EmbeddingCircuit(num_f=9, num_p=1, vb_npts=11)
+    assert cct.num_f == 9
+    assert cct.freq.shape == (10,)
+
+
 def test_shapes_follow_the_tone_harmonic_convention():
     cct = EmbeddingCircuit(num_f=3, num_p=2, vb_npts=77)
     assert cct.num_n == 6
@@ -186,8 +194,8 @@ def test_summary_works_without_junction_properties():
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"num_f": 5}, "must be 1, 2, 3 or 4"),
-        ({"num_f": 0}, "must be 1, 2, 3 or 4"),
+        ({"num_f": 0}, "int >= 1"),
+        ({"num_f": 2.5}, "int >= 1"),
         ({"num_p": 0}, "int >= 1"),
         ({"num_p": 1.5}, "int >= 1"),
         ({"vb_npts": 0}, "int >= 1"),

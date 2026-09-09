@@ -35,9 +35,10 @@ What is new here:
 | Response matrix | voltage array materialised, then interpolated | fused, thread-parallel, no temporaries |
 | Current summation | nested loops, single-threaded | cache-blocked and parallel, plus an FFT-correlation path |
 | Harmonic balance | Jacobian rebuilt every iteration | Broyden rank-1 updates, batched solve, line search |
+| Number of tones | hard-capped at 4 (memory grows as `(2·num_b+1)^F`) | unlimited, via a common frequency grid (memory linear in `F`) |
 | numba | required | optional, with a vectorised NumPy fallback |
 | Packaging | `setup.py`, conda `environment.yml` | `pyproject.toml`, `uv`, `src/` layout |
-| Tests | 1 705 lines | 321 tests, per module, plus Tucker-theory validation |
+| Tests | 1 705 lines | 376 tests, per module, plus Tucker-theory validation |
 
 A complete two-tone mixer simulation runs about **6× faster**, and the
 individual stages are 3–160× faster — see [Performance](#performance).
@@ -63,6 +64,7 @@ bought. Symbols: `F` tones, `P` harmonics, `B` = `num_b`, `N` bias points,
 | **Kramers–Kronig transform** | `scipy.signal.hilbert`, complex FFT, arbitrary length | real-input `rfft`/`irfft` on a 5-smooth length | same order, ~2× fewer flops | **2.8–13.6×** |
 | **Gaussian smoothing** | `numpy.convolve`, always direct | FFT convolution for wide kernels, auto-selected | `O(N·W)` → **`O(N log N)`** | used in setup |
 | **JIT strategy** | eager signatures, compiled at import | lazy compilation, cached on disk; numba **optional** | — | fast `import qpmix` |
+| **Tone count** | one summation index per tone, capped at 4 | all tones on a common frequency grid, single index | `(2B+1)^F·N` → **`(2K+1)·N`** (exponential → linear in `F`) | **70×** at 4 tones; 24 tones now possible at all |
 
 **Bottom line: a complete two-tone mixer simulation runs ~6× faster, and is
 ~8× closer to the exact answer.**
@@ -155,8 +157,47 @@ fast · batched `numpy.linalg` and `einsum` in harmonic balance.
 - **Speed-ups are smallest for one tone, one harmonic** at small `npts`,
   where per-call Python overhead dominates. They grow with problem size.
 
-Full analysis, including the complete complexity table and every measured
-case, is in **[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)**.
+### Many tones
+
+QMix asserts `num_f in [1, 2, 3, 4]`, because the response matrix holds
+`(2·num_b+1)^num_f · npts` complex values — 5.9 GB at four tones, 184 GB at
+five. `qpmix.multitone` lifts the cap by placing every tone on a common
+frequency grid, which collapses the multi-dimensional index to a single
+one and makes memory grow *linearly* with the tone count:
+
+| tones | `num_k` | grid memory | `qtcurrent` | multi-D would need |
+|---|---|---|---|---|
+| 4 | 414 | 5.1 MB | 16 ms | 797 MB |
+| 8 | 972 | 11.9 MB | 60 ms | 101 483 GB |
+| 16 | 2 520 | 30.8 MB | 256 ms | 1.7 × 10¹⁵ GB |
+| 24 | 4 644 | 56.8 MB | 699 ms | 2.9 × 10²⁵ GB |
+
+A full 16-tone harmonic balance takes 8.7 s — a quarter of what four tones
+used to cost. The grid is **opt-in below five tones** (`method="grid"`),
+because it also sums intermodulation products that the multi-dimensional
+engine truncates at `±num_p`, so switching automatically would change
+results rather than only run times.
+
+```python
+cct = qpmix.EmbeddingCircuit(16, 1, vb_npts=401)      # no longer capped at 4
+for f in range(1, 17):
+    cct.freq[f] = 0.20 + 0.02 * (f - 1)
+...
+i = qpmix.qtcurrent(vj, cct, resp, freqs, num_b=9)     # auto-selects the grid
+
+from qpmix.multitone import ToneGrid
+print(ToneGrid.from_circuit(cct, num_b=9).report(401))  # costs, before you commit
+```
+
+`benchmarks/study_continuum.py` answers the companion question — how many
+tones before a band simply *is* a continuum. For a 20%-wide band of
+random-phase tones at fixed total power, **five to thirteen tones already
+reproduce the 31-tone answer** to the ensemble noise floor, while the cost
+keeps climbing as `N^2.15`. The ceiling is set by cost, not physics.
+
+Full analysis, including the complete complexity table, every measured
+case, and a DC double-counting bug this work uncovered in the original
+tuple bookkeeping, is in **[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)**.
 
 ---
 
@@ -266,6 +307,7 @@ harmonic index `p` runs 1…`num_p`, with index 0 reserved for DC.
 | `harmonic_balance` | solve for the junction voltage |
 | `qtcurrent` | tunneling current at any set of frequencies |
 | `interpolate_respfn` | pre-interpolate the response function to reuse across calls |
+| `ToneGrid`, `qtcurrent_grid` | the common-grid engine for many tones (`qpmix.multitone`) |
 | `calculate_phase_factor_coeff` | phase-factor spectrum coefficients |
 | `check_hb_error` | independently verify a harmonic balance solution |
 | `read_circuit` | load a circuit from JSON or the legacy text format |
@@ -279,13 +321,15 @@ silence them.
 ## Testing and benchmarking
 
 ```bash
-uv run pytest                                  # 321 tests
+uv run pytest                                  # 376 tests
 uv run pytest -m "not reference"               # skip QMix cross-validation
 uv run pytest --cov=qpmix --cov-report=term    # with coverage
 QPMIX_DISABLE_JIT=1 uv run pytest              # exercise the NumPy fallback
 
 uv run python benchmarks/bench_all.py          # QMix vs QPMix, stage by stage
 uv run python benchmarks/bench_method.py       # direct vs FFT cost model
+uv run python benchmarks/bench_multitone.py    # scaling with the tone count
+uv run python benchmarks/study_continuum.py    # how many tones make a continuum
 ```
 
 The test suite is not only a comparison against QMix. The key checks are

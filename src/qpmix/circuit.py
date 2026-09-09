@@ -82,8 +82,10 @@ class EmbeddingCircuit:
     """The Thevenin equivalent circuit seen by the SIS junction.
 
     Args:
-        num_f (int, optional): Number of fundamental tones, 1 to 4.  Default
-            is 1.
+        num_f (int, optional): Number of fundamental tones.  Default is 1.
+            :func:`qpmix.qtcurrent.qtcurrent` handles up to four directly;
+            beyond that it switches to the common-grid engine in
+            :mod:`qpmix.multitone`.
         num_p (int, optional): Number of harmonics per tone.  Default is 1.
         vb_min (float, optional): Minimum bias voltage, normalized.  Default
             is 0.
@@ -132,8 +134,8 @@ class EmbeddingCircuit:
         rn: float | None = None,
         name: str = "",
     ) -> None:
-        if num_f not in (1, 2, 3, 4):
-            raise ValueError("Number of tones (num_f) must be 1, 2, 3 or 4.")
+        if int(num_f) != num_f or num_f < 1:
+            raise ValueError("Number of tones (num_f) must be an int >= 1.")
         if int(num_p) != num_p or num_p < 1:
             raise ValueError("Number of harmonics (num_p) must be an int >= 1.")
         if int(vb_npts) != vb_npts or vb_npts < 1:

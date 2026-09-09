@@ -66,6 +66,11 @@ __all__ = [
     "qtcurrent",
 ]
 
+#: The multi-dimensional kernels cover up to this many tones.  Above it the
+#: response matrix would not fit in memory, and ``qtcurrent`` switches to the
+#: common-grid engine in :mod:`qpmix.multitone`.
+MAX_DIRECT_TONES = 4
+
 #: Frequencies are compared after rounding to this many decimal places.
 #: Two intermodulation products land on the same output frequency only if
 #: they agree to within this tolerance.
@@ -94,6 +99,7 @@ def qtcurrent(
     verbose: bool = True,
     resp_matrix: np.ndarray | None = None,
     method: str = "auto",
+    **grid_kwargs,
 ) -> np.ndarray:
     """Calculate the quasiparticle tunneling current.
 
@@ -119,9 +125,17 @@ def qtcurrent(
             :func:`interpolate_respfn`.  Pass this when calling
             ``qtcurrent`` repeatedly with the same frequencies, as harmonic
             balance does.  Default is None.
-        method (str, optional): ``"auto"``, ``"direct"`` or ``"fft"``.
-            Selects how the current summation (Eqn. 5.25) is evaluated; all
-            three give the same answer.  Default is ``"auto"``.
+        method (str, optional): ``"auto"``, ``"direct"``, ``"fft"`` or
+            ``"grid"``.  The first three evaluate the current summation
+            (Eqn. 5.25) with the multi-dimensional kernels and give
+            identical answers; ``"grid"`` switches to the common-grid
+            engine in :mod:`qpmix.multitone`, which is the only option
+            above four tones.  ``"auto"`` uses the grid engine when there
+            are more than four tones and picks between ``"direct"`` and
+            ``"fft"`` otherwise.  Default is ``"auto"``.
+        **grid_kwargs: Forwarded to
+            :func:`qpmix.multitone.qtcurrent_grid` when the grid engine is
+            used (``grid``, ``num_theta``).
 
     Returns:
         ndarray: The tunneling current.  Shape ``(len(freq_list), npts)`` if
@@ -140,6 +154,31 @@ def qtcurrent(
 
     if freq[1:].min() <= 0.0:
         raise ValueError("All tone frequencies must be > 0.")
+
+    if method == "grid" or (method == "auto" and num_f > MAX_DIRECT_TONES):
+        from qpmix.multitone import qtcurrent_grid
+
+        return qtcurrent_grid(
+            vj,
+            cct,
+            resp,
+            freq_list,
+            num_b=num_b,
+            verbose=verbose,
+            resp_matrix=resp_matrix,
+            **grid_kwargs,
+        )
+    if grid_kwargs:
+        raise TypeError(
+            f"Unexpected keyword argument(s) for method={method!r}: "
+            f"{sorted(grid_kwargs)}"
+        )
+    if num_f > MAX_DIRECT_TONES:
+        raise ValueError(
+            f"method={method!r} supports at most {MAX_DIRECT_TONES} tones; "
+            f"this circuit has {num_f}. Use method='auto' or 'grid' to run "
+            f"it through qpmix.multitone."
+        )
 
     freq_is_list = np.ndim(freq_list) > 0
     freq_out = np.atleast_1d(np.asarray(freq_list, dtype=float)).round(ROUND_FREQ)
@@ -171,8 +210,9 @@ def qtcurrent(
 
     current_out = np.zeros((freq_out.size, npts), dtype=complex)
     for idx, tuples in enumerate(tuples_for):
+        at_dc = freq_out[idx] == 0.0
         for t in tuples:
-            current_out[idx] += _assemble(t, rs_lookup)
+            current_out[idx] += _assemble(t, rs_lookup, at_dc)
 
     if verbose:
         print(f" - method: {chosen}")
@@ -186,7 +226,9 @@ def qtcurrent(
     return current_out[0]
 
 
-def interpolate_respfn(cct, resp, num_b: int | tuple[int, ...]) -> np.ndarray:
+def interpolate_respfn(
+    cct, resp, num_b: int | tuple[int, ...], method: str = "auto", grid=None
+) -> np.ndarray:
     """Interpolate the response function at every voltage ``qtcurrent`` needs.
 
     Call this once and pass the result to :func:`qtcurrent` as
@@ -199,12 +241,23 @@ def interpolate_respfn(cct, resp, num_b: int | tuple[int, ...]) -> np.ndarray:
         resp (qpmix.respfn.RespFn): The response function.
         num_b (int or tuple): Summation limit for the phase-factor
             coefficients.
+        method (str, optional): Which engine the matrix is for; must match
+            what :func:`qtcurrent` will use.  Default is ``"auto"``.
+        grid (qpmix.multitone.ToneGrid, optional): Reuse a grid instead of
+            deriving one.  Only used by the grid engine.  Default is None.
 
     Returns:
-        ndarray: The response matrix, shape
-        ``(2*nb1+1, ..., 2*nbF+1, npts)``, complex.
+        ndarray: The response matrix.  Shape
+        ``(2*nb1+1, ..., 2*nbF+1, npts)`` for the multi-dimensional engine,
+        or ``(2*num_k+1, npts)`` for the grid engine.
 
     """
+    if method == "grid" or (method == "auto" and cct.num_f > MAX_DIRECT_TONES):
+        from qpmix.multitone import ToneGrid, interpolate_respfn_grid
+
+        if grid is None:
+            grid = ToneGrid.from_circuit(cct, num_b=num_b)
+        return interpolate_respfn_grid(cct, resp, grid)
     nb_list = _as_nb_tuple(num_b, cct.num_f)
     return build_resp_matrix(resp, cct.vb, cct.freq, nb_list)
 
@@ -220,6 +273,15 @@ def _matching_tuples(
     An index tuple ``(a, b, ...)`` contributes to output frequency
     ``f_out`` when ``a*f1 + b*f2 + ... == f_out``.
 
+    Note:
+        A tuple and its negation are never both returned for the same
+        output frequency.  Eqn. 5.26 combines ``RS+(t)`` and ``RS-(t)``,
+        and ``RS-(t) == RS+(-t)``, so the coefficient for ``t`` already
+        carries the contribution of ``-t``.  The two can only collide at
+        ``f_out == 0``, and only when the tones are commensurate enough
+        that some non-zero tuple sums to zero frequency -- but there,
+        enumerating both would double-count the DC current.
+
     Args:
         freq_out (ndarray): Requested output frequencies, already rounded.
         freq (ndarray): Tone frequencies, with ``freq[0]`` unused.
@@ -232,11 +294,16 @@ def _matching_tuples(
     """
     span = range(num_p, -(num_p + 1), -1)
     out: list[list[tuple[int, ...]]] = [[] for _ in freq_out]
+    seen: list[set[tuple[int, ...]]] = [set() for _ in freq_out]
     for t in itertools.product(span, repeat=num_f):
         f_t = round(float(np.dot(t, freq[1 : num_f + 1])), ROUND_FREQ)
         for idx, f_o in enumerate(freq_out):
-            if f_t == f_o:
-                out[idx].append(t)
+            if f_t != f_o:
+                continue
+            if tuple(-x for x in t) in seen[idx]:
+                continue
+            seen[idx].add(t)
+            out[idx].append(t)
     return out
 
 
@@ -262,14 +329,28 @@ def _needed_tuples(
     return list(seen)
 
 
-def _assemble(t: tuple[int, ...], rs: dict[tuple[int, ...], np.ndarray]) -> np.ndarray:
+def _assemble(
+    t: tuple[int, ...],
+    rs: dict[tuple[int, ...], np.ndarray],
+    at_dc: bool = False,
+) -> np.ndarray:
     """Combine the two correlation sums into a current coefficient.
 
     Eqn. 5.26 in Kittara's thesis.
 
+    Note:
+        At zero output frequency the tunneling current is real by
+        construction, so the quadrature term is dropped.  For the all-zero
+        tuple it vanishes anyway; for a non-zero tuple that happens to sum
+        to zero frequency it does not, and keeping it would leave a
+        spurious imaginary DC current.  See :func:`_matching_tuples` for
+        the companion half of this bookkeeping.
+
     Args:
         t (tuple): The index tuple.
         rs (dict): Correlation sums keyed by index tuple.
+        at_dc (bool, optional): True when this tuple contributes to zero
+            output frequency.  Default is False.
 
     Returns:
         ndarray: The current coefficient at this index tuple.
@@ -279,6 +360,8 @@ def _assemble(t: tuple[int, ...], rs: dict[tuple[int, ...], np.ndarray]) -> np.n
     if not any(t):
         return rs_p.imag + 0j
     rs_m = rs[tuple(-x for x in t)]
+    if at_dc:
+        return (rs_p.imag + rs_m.imag) + 0j
     return (rs_p.imag + rs_m.imag) - 1j * (rs_p.real - rs_m.real)
 
 
@@ -316,7 +399,7 @@ def _select_method(
         ValueError: If ``method`` is not recognised.
 
     """
-    if method not in ("auto", "direct", "fft"):
+    if method not in ("auto", "direct", "fft", "grid"):
         raise ValueError(f"Unknown method: {method!r}")
     if method != "auto":
         return method

@@ -42,6 +42,50 @@ numbering follow QMix; the numerical methods, packaging and tests are new.
 - **FFT convolution for Gaussian smoothing** (`mathfn.filters`), selected
   automatically for wide kernels.
 
+### Beyond four tones
+
+- **`qpmix.multitone`**: a common-grid engine that lifts QMix's
+  `assert num_f in [1, 2, 3, 4]`. Placing every tone on a shared frequency
+  grid collapses the multi-dimensional summation index to a single one, so
+  the response matrix holds `(2*num_k + 1) * npts` values instead of
+  `(2*num_b + 1)**num_f * npts` — **linear in the tone count rather than
+  exponential**. The phase factor is still one FFT, however many tones it
+  contains, and the current summation reduces to the one-dimensional
+  correlation the single-tone kernel already implements.
+  - 70x faster than the multi-dimensional engine at four tones, 2.7x at
+    three; 24 tones now run in 0.7 s where the direct method would have
+    needed 2.9e25 GB.
+  - A full 16-tone harmonic balance takes 8.7 s — a quarter of what four
+    tones used to cost.
+  - Opt-in below five tones (`method="grid"`), because the grid also sums
+    intermodulation products that the multi-dimensional engine truncates at
+    `±num_p`; switching automatically would change results, not just run
+    times.
+  - `ToneGrid` fits tones to a grid by rational approximation, reports the
+    frequency error it introduces, refuses to allocate a grid that closely
+    spaced tones would blow up, and takes a `max_num_k` budget as the cost
+    knob (`max_denominator` is *not* monotonic in cost).
+- `EmbeddingCircuit` no longer caps `num_f` at four.
+- `benchmarks/bench_multitone.py` measures the scaling;
+  `benchmarks/study_continuum.py` answers how many tones make a band a
+  continuum — about 5-13 for a 20%-wide band at the ensemble noise floor,
+  while cost keeps climbing as `N^2.15`.
+
+### Fixed: DC double-counting in the tuple bookkeeping
+
+Validating the grid engine against the photon-number sum rule
+`Idc = sum_K |C_K|^2 Idc0(V0 + K*df)` exposed a bug inherited from QMix. At
+zero output frequency both an index tuple `t` and its negation `-t` satisfy
+the matching condition, but Eqn. 5.26 for `t` already contains the `-t`
+contribution through `RS-(t) = RS+(-t)`, so the DC current was counted
+twice. It needs `num_p >= 2` *and* commensurate tones to trigger, which is
+why it had gone unnoticed; for three tones at 0.30/0.32/0.34 it is a 5%
+error in the DC current.
+
+QPMix now counts each `±` pair once and drops the quadrature term at DC,
+where the current is real by construction. Both engines then agree with the
+sum rule to 6e-13 and with each other to 1e-10.
+
 ### Architecture
 
 - Cache-blocked current kernels (`_kernels.BLOCK`), with the block index
@@ -78,9 +122,9 @@ numbering follow QMix; the numerical methods, packaging and tests are new.
 - Type hints throughout; `ruff`-clean.
 - Circuits round-trip through JSON as well as the legacy QMix text format.
 - Unit conversion driven by lookup tables (`POWER_UNITS`, `FREQ_UNITS`).
-- 321 tests across every module, including validation against Tucker theory
-  (an independent analytic ground truth) and optional cross-validation
-  against QMix itself.
+- 376 tests across every module, including validation against Tucker theory
+  and the photon-number sum rule (independent analytic ground truths) and
+  optional cross-validation against QMix itself.
 
 ### Not included in this release
 

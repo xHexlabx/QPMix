@@ -268,7 +268,153 @@ signals.
 
 ---
 
-## 5. Honest limitations
+## 5. Beyond four tones
+
+QMix asserts `num_f in [1, 2, 3, 4]`.  The cap is not arbitrary: Kittara's
+formulation carries one summation index per tone, so the interpolated
+response function holds `(2*num_b + 1)**num_f * npts` complex values —
+5.9 GB at four tones, 184 GB at five.
+
+`qpmix.multitone` removes the cap by putting every tone on a **common
+frequency grid**.  Tone `f` sits at `n_f * df` for integer `n_f`, and the
+multi-dimensional index collapses to a single one:
+
+```
+sum_k C_k e^{ikθ} = exp( i * sum_f sum_p α_{f,p} sin(p n_f θ − φ_{f,p}) )
+```
+
+That is still one scalar function of θ, so still **one FFT**, however many
+tones it contains.  The response function is then only needed at
+`vb + k*df` for `|k| <= K = sum_f n_f * num_b_f`, and the current summation
+becomes the same one-dimensional correlation the single-tone kernel already
+implements.
+
+### Complexity
+
+| | multi-dimensional | common grid |
+|---|---|---|
+| response-matrix entries | `(2B+1)^F * N` | `(2K+1) * N` |
+| growth in tone count `F` | **exponential** | **linear** |
+| growth at fixed bandwidth | — | `K ~ F**2` (measured `N^2.15`) |
+| set by | `num_b` | the grid multipliers `n_f` |
+
+### Measured (`npts=401`, `num_b=9`, tones 0.02 apart)
+
+Head to head, over the tone counts both engines support:
+
+| tones | `num_k` | grid entries | direct entries | grid | direct | speed-up |
+|---|---|---|---|---|---|---|
+| 1 | 9 | 7 619 | 7 619 | 0.61 ms | 0.53 ms | 0.9× |
+| 2 | 189 | 151 979 | 144 761 | 5.67 ms | 1.81 ms | 0.3× |
+| 3 | 297 | 238 595 | 2 750 459 | 10.8 ms | 29.5 ms | **2.7×** |
+| 4 | 414 | 332 429 | 52 258 721 | 16.2 ms | 1 142 ms | **70.7×** |
+
+Past the wall, where there is no alternative:
+
+| tones | `num_k` | grid memory | `qtcurrent` | multi-D would need |
+|---|---|---|---|---|
+| 6 | 675 | 8.3 MB | 36 ms | 281 GB |
+| 8 | 972 | 11.9 MB | 60 ms | 101 483 GB |
+| 12 | 1 674 | 20.5 MB | 137 ms | 1.3 × 10¹⁰ GB |
+| 16 | 2 520 | 30.8 MB | 256 ms | 1.7 × 10¹⁵ GB |
+| 24 | 4 644 | 56.8 MB | 699 ms | 2.9 × 10²⁵ GB |
+
+Full simulations, not just one current evaluation:
+
+| tones | harmonic balance (Newton) | (Broyden) |
+|---|---|---|
+| 4 | 33.5 s *(multi-dimensional)* | 14.6 s |
+| 8 | 3.47 s *(grid)* | **1.12 s** |
+| 12 | 9.08 s | 3.58 s |
+| 16 | 22.9 s | **8.69 s** |
+
+Sixteen tones now cost a quarter of what four used to.
+
+### Why the grid is opt-in below five tones
+
+`method="auto"` stays on the multi-dimensional engine at four tones and
+below, even where the grid is 70× faster.  The two engines do not truncate
+identically: with commensurate tones, index tuples beyond `±num_p` reach
+the same output frequency, and the grid sums them all while the
+multi-dimensional engine stops at `num_p`.  For three tones at
+0.30/0.32/0.34 that is a 5% difference in the DC current.  The grid answer
+is the more complete one — raising `num_p` makes the multi-dimensional
+engine converge to it, to 1e-11 — but switching engines automatically would
+change results, not just run times.  So it is a documented, benchmarked
+opt-in:
+
+```python
+i = qpmix.qtcurrent(vj, cct, resp, freqs, num_b=9, method="grid")
+```
+
+`ToneGrid.report(npts)` prints both costs so the choice can be made from
+numbers.
+
+### A bug this uncovered
+
+Validating the grid engine against the photon-number sum rule
+`Idc = Σ_K |C_K|² Idc⁰(V₀ + K·df)` — which follows from `Σ_K |C_K|² = 1`
+and holds for any number of tones — showed the multi-dimensional path
+disagreeing by 4.8 × 10⁻².  The cause was in the tuple bookkeeping, and it
+is inherited from QMix: at zero output frequency both `t` and `−t` satisfy
+the matching condition, but Eqn. 5.26 for tuple `t` already contains the
+`−t` contribution through `RS−(t) = RS+(−t)`, so the DC current was
+double-counted.  It needs `num_p >= 2` *and* commensurate tones to trigger,
+which is why it had gone unnoticed.
+
+QPMix now counts each `±` pair once and drops the quadrature term at DC
+(the current there is real by construction).  Both engines then agree with
+the sum rule to 6 × 10⁻¹³ and with each other to 1 × 10⁻¹⁰.
+
+### When *not* to use the grid
+
+`K` is set by the multipliers, not the tone count.  An LO and an RF signal
+5 MHz apart at 230 GHz need `n = (46000, 46001)` and `K = 1.4 × 10⁶` — far
+worse than the two-dimensional method.  `ToneGrid.from_circuit` refuses to
+allocate that and says so, rather than trying.  Use `max_num_k` to trade
+frequency accuracy for cost:
+
+```python
+grid = ToneGrid.from_circuit(cct, num_b=9, max_num_k=20_000)
+print(grid.frequency_error)
+```
+
+Note that `num_k` is *not* monotonic in `max_denominator` — a tighter cap
+can force a rational approximation needing a finer grid — which is why
+`max_num_k` exists as the cost knob.
+
+### The continuum ceiling
+
+`benchmarks/study_continuum.py` answers the other half of the question:
+how many tones before a band *is* a continuum.  A band of fractional width
+20% carrying fixed total power, split into `N` random-phase tones and
+ensemble-averaged over 12 realizations, gives:
+
+| tones | deviation from the `N=31` answer |
+|---|---|
+| 1 | 2.2 × 10⁻² |
+| 3 | 6.8 × 10⁻³ |
+| 5 | 2.6 × 10⁻³ |
+| 13 | 1.4 × 10⁻³ |
+| 21 | 1.8 × 10⁻³ |
+
+against a statistical floor of 1.8 × 10⁻³ set by the ensemble size.  So
+**about five to thirteen tones already reproduce the continuum** at this
+bandwidth and drive level, while the cost keeps climbing as `N^2.15`.  The
+ceiling is set by cost, not by physics.
+
+Only the *random-phase* comb has a continuum limit, and the script is built
+around that: each tone carries `α/√N`, so the RMS drive is fixed while the
+amplitude distribution tends to a Gaussian by the central limit theorem.  A
+single realization is one sample path and keeps changing with `N`; the
+ensemble average is what converges.  The deterministic combs
+(`--phase chirp`, `--phase flat`) are offered for comparison and
+deliberately do not converge — they hold the RMS fixed while the crest
+factor grows with `N`.
+
+---
+
+## 6. Honest limitations
 
 * **Response-function construction is ~1.8× slower** than QMix. It is a
   one-off cost, and it is what pays for the evaluation speed-up.
@@ -283,3 +429,12 @@ signals.
 * **Speed-ups are smallest for one tone, one harmonic** at small `npts`,
   where per-call Python overhead dominates. They grow with problem size,
   which is the regime that matters.
+* **The grid engine is slower than the multi-dimensional one at one and
+  two tones** (0.9× and 0.3×), which is why `auto` does not use it there.
+* **The grid engine needs commensurate tones.** Frequencies are fitted to a
+  common grid by rational approximation, which introduces a frequency error
+  that `ToneGrid.frequency_error` reports. Closely spaced tones force a
+  fine grid and are better served by the multi-dimensional engine.
+* **The continuum study measures one observable** (the pumped DC I-V curve)
+  for one band shape. A different observable — mixer gain, noise
+  temperature — may need more tones before it settles.

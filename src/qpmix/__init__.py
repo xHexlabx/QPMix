@@ -34,6 +34,7 @@ from qpmix._backend import get_config, set_num_threads
 from qpmix.circuit import EmbeddingCircuit, read_circuit
 from qpmix.harmonic_balance import check_hb_error, harmonic_balance
 from qpmix.interp import UniformInterpolator
+from qpmix.multitone import ToneGrid, qtcurrent_grid
 from qpmix.phase_factor import calculate_phase_factor_coeff
 from qpmix.qtcurrent import interpolate_respfn, qtcurrent
 from qpmix.respfn import (
@@ -53,6 +54,7 @@ __all__ = [
     "RespFnFromIVData",
     "RespFnPerfect",
     "RespFnPolynomial",
+    "ToneGrid",
     "UniformInterpolator",
     "__version__",
     "calculate_phase_factor_coeff",
@@ -61,6 +63,7 @@ __all__ = [
     "harmonic_balance",
     "interpolate_respfn",
     "qtcurrent",
+    "qtcurrent_grid",
     "read_circuit",
     "set_num_threads",
 ]
