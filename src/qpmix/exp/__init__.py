@@ -34,6 +34,7 @@ Examples:
 
 from qpmix.exp.currentmatch import (
     CurrentMatchResult,
+    current_residual,
     recover_zemb_current_match,
     voltage_windows,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "ZembResult",
     "ac_current",
     "check_offset",
+    "current_residual",
     "dcif_data",
     "dciv_curve",
     "if_data",

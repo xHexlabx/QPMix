@@ -39,7 +39,7 @@ What is new here:
 | Measured-data analysis | Bessel loops, 15 bisection steps, a 20 301-point double loop | vectorised sums, Newton with an analytic derivative, one broadcast |
 | numba | required | optional, with a vectorised NumPy fallback |
 | Packaging | `setup.py`, conda `environment.yml` | `pyproject.toml`, `uv`, `src/` layout |
-| Tests | 1 705 lines | 598 tests, per module, plus analytic validation |
+| Tests | 1 705 lines | 601 tests, per module, plus analytic validation |
 
 A complete two-tone mixer simulation runs about **6× faster**, and the
 individual stages are 3–160× faster — see [Performance](#performance).
@@ -344,6 +344,13 @@ Measured against the same fit driven by QMix, on real data:
 | QPMix, same 9 starts | 0.3608 − 0.5630j | 1.056e-3 | **25.1 s** (5.8×) |
 | QPMix, seeded (3 starts) | 0.3608 − 0.5619j | 1.056e-3 | **5.6 s** (25.7×) |
 
+`current_residual` exposes the quantity the fit minimises on its own, which
+is how to ask whether the data actually constrains a parameter: vary it and
+watch the residual. If it barely moves, the measurement does not determine
+it, however confidently the optimiser reported a value. It is also the only
+fair way to compare two fits, since each resamples the measured curve its
+own way.
+
 Impedance recovery follows the RF voltage-match method of Skalare (1989)
 and Withington *et al.* (1995).
 
@@ -425,7 +432,7 @@ silence them.
 ## Testing and benchmarking
 
 ```bash
-uv run pytest                                  # 598 tests
+uv run pytest                                  # 601 tests
 uv run pytest -m "not reference"               # skip QMix cross-validation
 uv run pytest --cov=qpmix --cov-report=term    # with coverage
 QPMIX_DISABLE_JIT=1 uv run pytest              # exercise the NumPy fallback

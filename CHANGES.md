@@ -213,6 +213,9 @@ evaluation costs 32.2 ms in QMix and 5.9 ms in QPMix.
 
 Also added:
 
+- `qpmix.exp.current_residual` exposes the fitted quantity on its own, for
+  asking how sharply the data constrains a parameter, and for comparing two
+  fits on one grid.
 - `qpmix.exp.check_offset` verifies that the offset correction worked, by
   measuring the residual asymmetry of the curve against its own point
   reflection. Returns numbers and a pass/fail, so it can be asserted on

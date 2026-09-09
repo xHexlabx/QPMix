@@ -17,6 +17,7 @@ from qpmix.exp.currentmatch import (
     VOLTAGE_METHODS,
     _admissible,
     _unpack,
+    current_residual,
     default_guesses,
     recover_zemb_current_match,
     voltage_windows,
@@ -296,6 +297,54 @@ def test_reports_when_no_solution_is_admissible(resp, pumped):
             guesses=[[-1.0, -1.0, 0.0]],
             maxiter=1,
         )
+
+
+# -- residual helper ----------------------------------------------------
+
+
+@pytest.mark.slow
+def test_residual_is_smallest_at_the_true_source(resp, pumped):
+    voltage, current = pumped
+    exact = current_residual(resp, voltage, current, VPH, VT, ZT, num_b=15)
+    for wrong in (ZT + 0.2, ZT - 0.3j, ZT * 2):
+        assert (
+            current_residual(resp, voltage, current, VPH, VT, wrong, num_b=15) > exact
+        )
+
+
+@pytest.mark.slow
+def test_residual_matches_what_the_fit_reports(resp, pumped):
+    """The same quantity the optimiser minimises, exposed on its own."""
+    voltage, current = pumped
+    result = recover_zemb_current_match(
+        resp, voltage, current, VPH, num_b=15, guesses=[[VT, ZT.real, ZT.imag]]
+    )
+    direct = current_residual(
+        resp,
+        result.voltage,
+        result.current,
+        VPH,
+        result.vt,
+        result.zt,
+        windows=result.windows,
+        num_b=15,
+    )
+    assert direct == pytest.approx(result.err, rel=1e-9)
+
+
+@pytest.mark.slow
+def test_residual_accepts_several_harmonics(resp):
+    cct = qpmix.EmbeddingCircuit(1, 2, vb_npts=401, vb_max=1.5)
+    cct.freq[1] = VPH
+    cct.vt[1, 1] = VT
+    cct.zt[1, 1] = ZT
+    cct.zt[1, 2] = 0.25 + 0.40j
+    vj = qpmix.harmonic_balance(cct, resp, num_b=15, verbose=False)
+    idc = qpmix.qtcurrent(vj, cct, resp, 0.0, num_b=15, verbose=False)
+
+    exact = current_residual(resp, cct.vb, idc, VPH, VT, (ZT, 0.25 + 0.40j), num_b=15)
+    wrong = current_residual(resp, cct.vb, idc, VPH, VT, (ZT, 0.90 - 0.90j), num_b=15)
+    assert exact < wrong
 
 
 # -- offset verification ------------------------------------------------

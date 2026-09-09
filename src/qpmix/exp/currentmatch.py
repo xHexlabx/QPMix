@@ -84,6 +84,7 @@ from qpmix.qtcurrent import interpolate_respfn, qtcurrent
 __all__ = [
     "VOLTAGE_METHODS",
     "CurrentMatchResult",
+    "current_residual",
     "default_guesses",
     "recover_zemb_current_match",
     "voltage_windows",
@@ -388,6 +389,64 @@ class _Objective:
         return float(np.mean(errors))
 
 
+def current_residual(
+    resp,
+    voltage: np.ndarray,
+    current: np.ndarray,
+    vph: float,
+    vt: float,
+    zt,
+    windows=None,
+    num_b: int = 20,
+    hb_kwargs: dict[str, Any] | None = None,
+) -> float:
+    """RMS current residual of one candidate embedding circuit.
+
+    The same quantity :func:`recover_zemb_current_match` minimises, exposed
+    on its own.  Use it to ask how sharply the data actually constrains a
+    parameter -- vary one and watch the residual.  If it barely moves, the
+    measurement does not determine that parameter, however confidently the
+    optimiser reported it.
+
+    It is also the only fair way to compare two fits: each one resamples the
+    measured curve its own way, so their reported residuals are not
+    comparable until both are re-evaluated here, on one grid.
+
+    Args:
+        resp (qpmix.respfn.RespFn): Response function.
+        voltage (ndarray): Bias voltage, normalized.
+        current (ndarray): Measured pumped current, normalized.
+        vph (float): Photon voltage, normalized.
+        vt (float): Candidate Thevenin voltage.
+        zt (complex or sequence): Candidate embedding impedance, one per
+            harmonic.
+        windows (sequence, optional): Bias windows to evaluate over.
+            Defaults to the whole supplied range.
+        num_b (int, optional): Bessel summation limit.  Default is 20.
+        hb_kwargs (dict, optional): Extra harmonic-balance options.  Default
+            is None.
+
+    Returns:
+        float: The RMS residual, or ``inf`` if the simulation failed.
+
+    """
+    voltage = np.asarray(voltage, dtype=float)
+    current = np.asarray(current, dtype=float)
+    zt = np.atleast_1d(np.asarray(zt, dtype=complex))
+    if windows is None:
+        windows = ((float(voltage.min()), float(voltage.max())),)
+
+    options = {"max_it": 30, "stop_rerror": 1e-4}
+    options.update(hb_kwargs or {})
+    objective = _Objective(
+        resp, voltage, current, vph, zt.size, tuple(windows), num_b, options
+    )
+    params = [float(vt)]
+    for z in zt:
+        params += [float(z.real), float(z.imag)]
+    return objective(params)
+
+
 def recover_zemb_current_match(
     resp,
     voltage: np.ndarray,
@@ -552,18 +611,26 @@ def _resolve_guesses(guesses, harmonics, resp, voltage, current, vph, num_b, ver
             vt, zt = seed
             if verbose:
                 print(f"  seeded from voltage match: vt={vt:+.4f} zt={zt:+.4f}")
-            base = [vt] + [c for _ in range(harmonics) for c in (zt.real, zt.imag)]
-            out = [base]
-            for scale in (0.6, 1.6):
-                out.append(
-                    [vt]
-                    + [
-                        c
-                        for _ in range(harmonics)
-                        for c in (zt.real * scale, zt.imag * scale)
+
+            def build(scale, harmonic_scale=1.0):
+                """One start: the seed, with the harmonics scaled."""
+                out = [vt, zt.real * scale, zt.imag * scale]
+                for _ in range(harmonics - 1):
+                    out += [
+                        zt.real * scale * harmonic_scale,
+                        zt.imag * scale * harmonic_scale,
                     ]
-                )
-            return out
+                return out
+
+            starts = [build(1.0), build(0.6), build(1.6)]
+            if harmonics > 1:
+                # The embedding circuit often presents a very different
+                # impedance at the harmonics -- frequently close to a short.
+                # Seeding them all at the fundamental's value explores only
+                # one corner, and on real data that corner can contain no
+                # admissible solution at all.
+                starts += [build(1.0, 0.0), build(1.0, 2.0), build(1.0, -1.0)]
+            return starts
         raise ValueError(f"Unknown guesses option: {guesses!r}")
 
     starts = [list(g) for g in guesses]
