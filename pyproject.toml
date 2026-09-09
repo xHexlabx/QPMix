@@ -57,6 +57,13 @@ dev = [
     "numba>=0.59",
 ]
 
+# QMix is only needed for the optional cross-validation tests
+# (`pytest -m reference`).  It ships as an sdist whose setup.py imports the
+# package itself, so its runtime dependencies have to be present in the
+# isolated build environment or the build fails.
+[tool.uv.extra-build-dependencies]
+qmix = ["numpy", "scipy", "matplotlib", "numba"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/qpmix"]
 
