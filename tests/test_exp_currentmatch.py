@@ -131,11 +131,20 @@ def test_unpack_rejects_the_wrong_length():
         (0.5, (-0.1 - 0.3j,), False),  # negative resistance
         (-0.5, (0.4 - 0.3j,), False),  # negative source voltage
         (0.5, (0.4 - 50j,), False),  # runaway reactance
+        (0.5, (122.0 + 0.3j,), False),  # runaway resistance
+        (0.5, (0.4 - 0.3j, 0.2 + 90.0j), False),  # bad second harmonic
         (np.nan, (0.4 - 0.3j,), False),
     ],
 )
 def test_admissibility_rules(vt, zt, ok):
-    assert _admissible(vt, zt, max_reactance=5.0) is ok
+    assert _admissible(vt, zt, max_reactance=5.0, max_resistance=5.0) is ok
+
+
+def test_a_runaway_resistance_is_rejected():
+    """Bounding only the reactance is not enough: a poorly constrained
+    higher-harmonic fit reached zt = 122 + 0.3j on real data."""
+    assert not _admissible(0.5, (122.0 + 0.3j,), 5.0, 5.0)
+    assert _admissible(0.5, (4.0 + 0.3j,), 5.0, 5.0)
 
 
 # -- recovery -----------------------------------------------------------

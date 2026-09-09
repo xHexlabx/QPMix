@@ -213,6 +213,9 @@ evaluation costs 32.2 ms in QMix and 5.9 ms in QPMix.
 
 Also added:
 
+- `_admissible` now bounds the embedding *resistance* from above as well as
+  the reactance. Bounding only the reactance let a poorly constrained
+  second-harmonic fit return `zt = 122 + 0.3j` and be accepted.
 - `qpmix.exp.current_residual` exposes the fitted quantity on its own, for
   asking how sharply the data constrains a parameter, and for comparing two
   fits on one grid.

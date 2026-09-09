@@ -265,17 +265,22 @@ def _unpack(params, harmonics):
     return vt, zt
 
 
-def _admissible(vt, zt, max_reactance):
+def _admissible(vt, zt, max_reactance, max_resistance):
     """Is this a physically sensible embedding circuit?
 
     A passive source has non-negative resistance and a non-negative
-    available voltage; a wildly large reactance means the simplex has
-    wandered off rather than converged.
+    available voltage.  Beyond that, an impedance far larger than the
+    junction's own normal resistance means the simplex has wandered off
+    rather than converged: bounding only the reactance is not enough,
+    because the resistance can run away just as easily.  A poorly
+    constrained higher-harmonic fit reached ``zt = 122 + 0.3j`` on real
+    data before this bound existed.
 
     Args:
         vt (float): Thevenin voltage.
         zt (tuple): Embedding impedances.
         max_reactance (float): Largest acceptable ``|Im zt|``.
+        max_resistance (float): Largest acceptable ``Re zt``.
 
     Returns:
         bool: True if the solution is admissible.
@@ -284,7 +289,11 @@ def _admissible(vt, zt, max_reactance):
     if not np.isfinite(vt) or vt <= 0:
         return False
     for z in zt:
-        if not np.isfinite(z) or z.real < 0 or abs(z.imag) > max_reactance:
+        if not np.isfinite(z):
+            return False
+        if not 0 <= z.real <= max_resistance:
+            return False
+        if abs(z.imag) > max_reactance:
             return False
     return True
 
@@ -461,6 +470,7 @@ def recover_zemb_current_match(
     npts: int | None = None,
     cluster_tol: float = 0.02,
     max_reactance: float = 5.0,
+    max_resistance: float = 5.0,
     maxiter: int = 400,
     xatol: float = 1e-6,
     fatol: float = 1e-10,
@@ -497,8 +507,12 @@ def recover_zemb_current_match(
             capped at 2000.
         cluster_tol (float, optional): Two solutions count as the same when
             every parameter agrees to within this.  Default is 0.02.
-        max_reactance (float, optional): Reject solutions whose reactance
+        max_reactance (float, optional): Reject solutions whose ``|Im zt|``
             exceeds this.  Default is 5.
+        max_resistance (float, optional): Reject solutions whose ``Re zt``
+            exceeds this.  An embedding resistance many times the junction's
+            normal resistance means the simplex ran away, not that the
+            circuit is unusual.  Default is 5.
         maxiter (int, optional): Simplex iteration limit per run.  Default
             is 400.
         xatol (float, optional): Simplex parameter tolerance.  Default is
@@ -567,7 +581,9 @@ def recover_zemb_current_match(
             options={"xatol": xatol, "fatol": fatol, "maxiter": maxiter},
         )
         vt, zt = _unpack(result.x, harmonics)
-        ok = bool(np.isfinite(result.fun)) and _admissible(vt, zt, max_reactance)
+        ok = bool(np.isfinite(result.fun)) and _admissible(
+            vt, zt, max_reactance, max_resistance
+        )
         candidates.append((tuple(start), tuple(result.x), float(result.fun), ok))
         if verbose:
             flag = "ok " if ok else "rej"
@@ -695,7 +711,7 @@ def _select(candidates, harmonics, cluster_tol, windows, objective):
     if not admissible:
         raise ValueError(
             f"None of the {len(candidates)} runs produced a physically "
-            f"admissible embedding circuit (non-negative resistance, "
+            f"admissible embedding circuit (bounded non-negative resistance, "
             f"positive voltage, bounded reactance). Try a different bias "
             f"window or more starting points."
         )

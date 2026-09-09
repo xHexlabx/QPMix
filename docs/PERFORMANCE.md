@@ -566,7 +566,57 @@ Four of the nine converge on something unphysical with a *lower* residual
 than the accepted answer. Taking the minimum would have returned one of
 them.
 
-### A bug this uncovered
+### What the second harmonic is, and is not, recoverable from
+
+Fitting a second-harmonic embedding impedance to all eighteen pumped
+measurements answers a question a single fit cannot: is `zt2` a measurement,
+or an artefact?
+
+| | one harmonic | two harmonics |
+|---|---|---|
+| files where the nine starts agreed | **18 / 18** | **0 / 18** |
+| Hot/Cold repeatability of `zt1` | 0.125 | 0.132 |
+| Hot/Cold repeatability of `zt2` | — | **0.650** |
+
+Hot and Cold are the same embedding circuit measured against different
+blackbody loads, so the recovered impedance must repeat between them. That
+check owes nothing to the optimiser. The fundamental repeats to 0.13
+normalized; the second harmonic only to 0.65, against a magnitude `|zt2|` of
+about 1.0–1.6 — a scatter of 50–65% of the value itself.
+
+The data is not *blind* to the second harmonic. Shorting it (`zt2 = 0`)
+raises the residual by a median factor of 3.7 over the first photon step, so
+the fit does see something. But the minimum is too shallow and too broad for
+the optimiser to locate, and the located value does not reproduce.
+
+**A wider bias window makes it worse, not better** — which is the opposite
+of the natural guess, since more photon steps ought to carry more
+second-harmonic information:
+
+| window | `rms(zt2=0) / rms(best)` | Hot/Cold `\|Δzt2\|` | Hot/Cold `\|Δzt1\|` (2H) |
+|---|---|---|---|
+| `first_photon` | 3.7 | 0.65 | 0.13 |
+| `full_subgap` | **1.14** | 1.84 | 0.21 |
+| `photon_steps` | 1.38 | 122 | 0.59 |
+
+Over the full subgap the residual is dominated by the large-current regions,
+where the second harmonic barely matters, so its relative weight *drops* to
+almost nothing. And the extra free parameter then corrupts the part that
+*was* well determined: over the full subgap the one-harmonic fit repeats
+between Hot and Cold to 0.004, while the two-harmonic fit's fundamental
+repeats only to 0.21.
+
+The practical conclusion: fit one harmonic on the first photon step, treat a
+recovered `zt2` as an upper-bound-shaped hint rather than a measurement, and
+read the agreement figure before believing any of it.
+
+### Two bugs this uncovered
+
+`_admissible` bounded the reactance but nothing bounded the resistance from
+above, so a poorly constrained higher-harmonic fit was free to return
+`zt2 = 122 + 0.3j` and have it accepted. An embedding resistance a hundred
+times the junction's normal resistance means the simplex ran away, not that
+the circuit is unusual. Both are bounded now.
 
 `harmonic_balance` printed its non-convergence warning unconditionally,
 ignoring `verbose` — inherited from QMix. A fit that calls it four thousand
@@ -610,6 +660,9 @@ times then produces four thousand lines of warning. It is now gated on
   milliseconds for voltage matching — because every objective evaluation is
   a harmonic balance. Use voltage matching when its assumptions hold, and
   current matching when they do not.
+* **A second-harmonic impedance is not recoverable from a DC I-V curve
+  alone**, at least not from this data — see above. The one-harmonic fit is
+  reliable; the two-harmonic one gives an answer that does not repeat.
 * **`guesses="seeded"` trusts the voltage-match answer to be in the right
   basin.** It was on the data measured here, but it explores less than the
   nine-point grid; `guesses="grid"` remains the default for that reason.
