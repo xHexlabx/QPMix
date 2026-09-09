@@ -1,0 +1,87 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qpmix"
+version = "0.1.0"
+description = "Fast multi-tone spectral domain analysis of SIS quasiparticle mixers"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "HexTex" }]
+keywords = [
+    "SIS mixers",
+    "radio astronomy",
+    "superconducting detectors",
+    "terahertz instrumentation",
+    "harmonic balance",
+    "quasiparticle tunneling",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+# JIT-compiled kernels.  Everything works without numba, just slower.
+jit = ["numba>=0.59"]
+plot = ["matplotlib>=3.7"]
+all = ["numba>=0.59", "matplotlib>=3.7"]
+
+[project.urls]
+Homepage = "https://github.com/xHexlabx/QPMix"
+Issues = "https://github.com/xHexlabx/QPMix/issues"
+"Upstream project (QMix)" = "https://github.com/garrettj403/QMix"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "matplotlib>=3.7",
+    "numba>=0.59",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qpmix"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests", "src/qpmix"]
+addopts = "-ra --strict-markers --doctest-modules --ignore=benchmarks"
+markers = [
+    "slow: long-running simulations (deselect with '-m \"not slow\"')",
+    "reference: cross-validation against the upstream QMix package",
+]
+filterwarnings = ["error::RuntimeWarning"]
+
+[tool.coverage.run]
+source = ["src/qpmix"]
+branch = true
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
+ignore = ["E741"]  # k, l, m indices follow the source equations
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]

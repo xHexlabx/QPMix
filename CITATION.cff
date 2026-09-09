@@ -1,0 +1,69 @@
+cff-version: 1.2.0
+message: >-
+  QPMix is derivative work based on QMix.  If you use QPMix in published
+  work, please cite the QMix papers listed under `references` below.
+title: "QPMix: fast multi-tone spectral domain analysis of SIS quasiparticle mixers"
+abstract: >-
+  QPMix simulates the quasiparticle tunneling currents in SIS junctions
+  using multi-tone spectral domain analysis.  It is a re-engineered
+  derivative of QMix (Garrett & Yassin) with FFT-based phase-factor
+  coefficients, uniform-grid response-function interpolation, cache-blocked
+  parallel kernels and Broyden-accelerated harmonic balance.
+type: software
+license: GPL-3.0-or-later
+version: 0.1.0
+repository-code: "https://github.com/xHexlabx/QPMix"
+keywords:
+  - SIS mixers
+  - radio astronomy
+  - superconducting detectors
+  - terahertz instrumentation
+  - harmonic balance
+authors:
+  - alias: HexTex
+references:
+  - type: software
+    title: "QMix: Quantum Mixing Software"
+    authors:
+      - family-names: Garrett
+        given-names: John D.
+    repository-code: "https://github.com/garrettj403/QMix"
+    license: GPL-3.0-or-later
+    doi: 10.5281/zenodo.2538162
+  - type: article
+    title: >-
+      QMix: A Python package for simulating the quasiparticle tunneling
+      currents in SIS junctions
+    authors:
+      - family-names: Garrett
+        given-names: J. D.
+      - family-names: Yassin
+        given-names: G.
+    journal: Journal of Open Source Software
+    year: 2019
+    volume: 4
+    issue: 35
+    start: 1231
+    doi: 10.21105/joss.01231
+  - type: article
+    title: >-
+      Simulating the Behavior of a 230-GHz SIS Mixer Using Multitone
+      Spectral Domain Analysis
+    authors:
+      - family-names: Garrett
+        given-names: J. D.
+      - family-names: Tan
+        given-names: B.-K.
+      - family-names: Boussaha
+        given-names: F.
+      - family-names: Chaumont
+        given-names: C.
+      - family-names: Yassin
+        given-names: G.
+    journal: IEEE Transactions on Terahertz Science and Technology
+    year: 2019
+    volume: 9
+    issue: 6
+    start: 540
+    end: 548
+    doi: 10.1109/TTHZ.2019.2938993
