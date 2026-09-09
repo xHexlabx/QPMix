@@ -52,7 +52,7 @@ from qpmix.exp.parameters import merge_params
 from qpmix.mathfn.filters import gauss_conv
 from qpmix.mathfn.misc import slope
 
-__all__ = ["DCIVData", "dciv_curve", "iv_curve"]
+__all__ = ["DCIVData", "OffsetReport", "check_offset", "dciv_curve", "iv_curve"]
 
 #: Multipliers converting the named voltage unit into volts.
 VOLT_UNITS = {"uV": 1e-6, "mV": 1e-3, "V": 1.0}
@@ -96,6 +96,112 @@ class DCIVData(NamedTuple):
     offset: tuple[float, float]
     vint: float
     rseries: float | None
+
+
+class OffsetReport(NamedTuple):
+    """How well an I-V curve is centred on the origin.
+
+    An SIS I-V curve is odd about the origin, so any residual offset shows
+    up as a mismatch between the curve and its own point reflection.  These
+    numbers quantify that, which turns "does the offset correction look
+    right?" from a judgement made by eye into something a script -- or a
+    test -- can assert on.
+
+    Attributes:
+        i_at_zero (float): Current at zero bias, in amps.  Should be ~0.
+        v_at_zero (float): Bias voltage at zero current, in volts.  Should
+            be ~0.
+        asym_rms (float): RMS difference between the curve and its
+            reflection over the check window, in amps.
+        asym_max (float): Largest such difference, in amps.
+        window (float): Half-width of the check window, in volts.
+        passed (bool): Whether ``asym_rms`` is within the tolerance asked
+            for.
+        tolerance (float): The tolerance used, in amps.
+
+    """
+
+    i_at_zero: float
+    v_at_zero: float
+    asym_rms: float
+    asym_max: float
+    window: float
+    passed: bool
+    tolerance: float
+
+    def summary(self) -> str:
+        """Return a human-readable summary.
+
+        Returns:
+            str: A multi-line summary.
+
+        """
+        verdict = "OK" if self.passed else "FAILED"
+        return "\n".join(
+            [
+                f"Offset check [{verdict}] over +/-{self.window * 1e3:.3f} mV",
+                f"  I at V=0        : {self.i_at_zero * 1e6:+8.3f} uA",
+                f"  V at I=0        : {self.v_at_zero * 1e6:+8.3f} uV",
+                f"  asymmetry (rms) : {self.asym_rms * 1e6:8.3f} uA"
+                f"  (tolerance {self.tolerance * 1e6:.3f} uA)",
+                f"  asymmetry (max) : {self.asym_max * 1e6:8.3f} uA",
+            ]
+        )
+
+
+def check_offset(
+    volt_v: np.ndarray,
+    curr_a: np.ndarray,
+    window: float = 5e-4,
+    tolerance: float = 1e-7,
+    npts: int = 201,
+) -> OffsetReport:
+    """Verify that an I-V curve is centred on the origin.
+
+    Compares the curve with its own point reflection about the origin, which
+    an ideal SIS I-V curve is invariant under.  Use it after
+    :func:`dciv_curve` to confirm the offset correction actually worked,
+    rather than assuming it did.
+
+    Args:
+        volt_v (ndarray): Bias voltage in volts, offset already removed.
+        curr_a (ndarray): Tunneling current in amps.
+        window (float, optional): Half-width of the check window, in volts.
+            Default is 5e-4.
+        tolerance (float, optional): Largest acceptable RMS asymmetry, in
+            amps.  Default is 1e-7.
+        npts (int, optional): Points to compare over.  Default is 201.
+
+    Returns:
+        OffsetReport: The measured asymmetry and whether it passed.
+
+    Raises:
+        ValueError: If the data does not span the check window.
+
+    """
+    volt_v = np.asarray(volt_v, dtype=float)
+    curr_a = np.asarray(curr_a, dtype=float)
+    if volt_v.min() > -window or volt_v.max() < window:
+        raise ValueError(
+            f"The data spans {volt_v.min():.3g} to {volt_v.max():.3g} V, "
+            f"which does not cover the +/-{window:.3g} V check window."
+        )
+
+    probe = np.linspace(-window, window, npts)
+    forward = np.interp(probe, volt_v, curr_a)
+    reflected = -np.interp(-probe, volt_v, curr_a)
+    asym = forward - reflected
+
+    rms = float(np.sqrt(np.mean(asym**2)))
+    return OffsetReport(
+        i_at_zero=float(np.interp(0.0, volt_v, curr_a)),
+        v_at_zero=float(volt_v[np.abs(curr_a).argmin()]),
+        asym_rms=rms,
+        asym_max=float(np.abs(asym).max()),
+        window=float(window),
+        passed=bool(rms <= tolerance),
+        tolerance=float(tolerance),
+    )
 
 
 def _debug_plot(volt_v, curr_a, title):  # pragma: no cover - interactive

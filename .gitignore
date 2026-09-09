@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local notebooks and measurement data (not part of the package)
+notebooks/

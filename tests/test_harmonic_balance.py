@@ -174,6 +174,9 @@ def test_mode_m_reports_a_per_point_mask(resp_poly, make_circuit):
 
 
 def test_failure_to_converge_is_reported(resp_poly, make_circuit, capsys):
+    """Quiet runs report non-convergence through the return value, not by
+    printing: a fitting loop calls this thousands of times and cannot have
+    it write to stdout.  QMix prints unconditionally."""
     cct = _driven(make_circuit(npts=21))
     _, _, converged = harmonic_balance(
         cct,
@@ -185,6 +188,12 @@ def test_failure_to_converge_is_reported(resp_poly, make_circuit, capsys):
         stop_rerror=1e-12,
     )
     assert converged is False
+    assert "DID NOT ACHIEVE" not in capsys.readouterr().out
+
+
+def test_failure_to_converge_is_printed_when_verbose(resp_poly, make_circuit, capsys):
+    cct = _driven(make_circuit(npts=21))
+    harmonic_balance(cct, resp_poly, num_b=9, verbose=True, max_it=0, stop_rerror=1e-12)
     assert "DID NOT ACHIEVE" in capsys.readouterr().out
 
 

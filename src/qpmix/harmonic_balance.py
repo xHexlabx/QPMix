@@ -80,6 +80,7 @@ def harmonic_balance(
     zj_guess: float = 0.67,
     jacobian: str = "broyden",
     line_search: bool = True,
+    resp_matrix: np.ndarray | None = None,
 ):
     """Solve for the junction voltage that balances the circuit.
 
@@ -104,8 +105,11 @@ def harmonic_balance(
         mode (str, optional): ``"o"`` returns ``vj``; ``"x"`` also returns
             the iteration count and a converged flag; ``"m"`` also returns
             a per-bias-point convergence mask.  Default is ``"o"``.
-        verbose (bool, optional): Print progress to the terminal.  Default
-            is True.
+        verbose (bool, optional): Print progress to the terminal, including
+            a warning if the error target is not met.  Default is True.
+            Use ``mode="x"`` to detect non-convergence programmatically --
+            a fitting loop that calls this thousands of times cannot afford
+            the message, and QMix prints it unconditionally.
         zj_guess (float, optional): Assumed junction impedance for the
             initial guess.  Default is 0.67.
         jacobian (str, optional): ``"broyden"`` recomputes the Jacobian
@@ -114,6 +118,12 @@ def harmonic_balance(
             Default is ``"broyden"``.
         line_search (bool, optional): Backtrack a step that would increase
             the residual.  Default is True.
+        resp_matrix (ndarray, optional): A pre-computed response matrix from
+            :func:`qpmix.qtcurrent.interpolate_respfn`.  It depends only on
+            the bias sweep, the tone frequencies and ``num_b`` -- none of
+            which change while fitting an embedding circuit -- so passing it
+            in avoids rebuilding the single most expensive array on every
+            call.  Default is None.
 
     Returns:
         ndarray: The junction voltage, shape
@@ -169,7 +179,9 @@ def harmonic_balance(
         print(f" - {num_n * 2 + 1} qtcurrent call(s) for the first iteration")
         print(f" - max. iterations: {max_it}")
 
-    respfn_interp = interpolate_respfn(cct, resp, num_b)
+    respfn_interp = (
+        interpolate_respfn(cct, resp, num_b) if resp_matrix is None else resp_matrix
+    )
     freq_list = _hb_freq_list(cct)
 
     def residual(vj: np.ndarray) -> np.ndarray:
@@ -194,7 +206,8 @@ def harmonic_balance(
                 print("Done: Minimum error target was achieved.")
             break
         if iteration == max_it:
-            print("*** DID NOT ACHIEVE TARGET ERROR VALUE ***\n")
+            if verbose:
+                print("*** DID NOT ACHIEVE TARGET ERROR VALUE ***\n")
             break
 
         if inv_j is None or jacobian == "newton":

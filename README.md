@@ -39,7 +39,7 @@ What is new here:
 | Measured-data analysis | Bessel loops, 15 bisection steps, a 20 301-point double loop | vectorised sums, Newton with an analytic derivative, one broadcast |
 | numba | required | optional, with a vectorised NumPy fallback |
 | Packaging | `setup.py`, conda `environment.yml` | `pyproject.toml`, `uv`, `src/` layout |
-| Tests | 1 705 lines | 555 tests, per module, plus analytic validation |
+| Tests | 1 705 lines | 598 tests, per module, plus analytic validation |
 
 A complete two-tone mixer simulation runs about **6× faster**, and the
 individual stages are 3–160× faster — see [Performance](#performance).
@@ -300,8 +300,52 @@ pumped.tn_best, pumped.g_db       # noise temperature and gain
 
 The import pipeline corrects the voltage/current offset, removes a series
 resistance, and filters the curve by rotating it so the gap transition is
-not smeared. Impedance recovery uses the RF voltage-match method of Skalare
-(1989) and Withington *et al.* (1995).
+not smeared. `check_offset` then *verifies* the correction worked, by
+measuring how far the curve departs from its own point reflection — turning
+a judgement made by eye into something a script can assert on.
+
+### Two ways to recover the embedding circuit
+
+| | voltage matching | current matching |
+|---|---|---|
+| fits | the load line from Tucker theory | the simulated pumped I-V curve |
+| cost | closed form, ~20 ms | a harmonic balance per evaluation |
+| needs | one tone, first photon step | nothing beyond the simulation |
+| window | first photon step only | first step, full subgap, full range, or per-step |
+| harmonics | fundamental only | fundamental plus higher harmonics |
+
+```python
+from qpmix.exp import recover_zemb_current_match
+
+result = recover_zemb_current_match(
+    resp, voltage, current, vph,
+    method="full_subgap",      # or first_photon / full_range / photon_steps
+    harmonics=2,               # fit Z_T at f_LO and 2*f_LO
+    guesses="seeded",          # seed from the fast voltage-match answer
+)
+result.zt          # (Z_T at f_LO, Z_T at 2*f_LO), normalized to Rn
+result.occurrences # how many independent starts agreed on this
+```
+
+Being independent, the two agreeing is evidence: on a real 183.6 GHz
+measurement they agree to 0.04 Ω.
+
+The residual surface has unphysical local minima, so the answer is the one
+the independent starts *agree* on — after discarding negative resistances,
+negative source voltages and runaway reactances — not simply the lowest
+residual. On the real measurement, four of nine starts converged on
+something unphysical with a *lower* residual than the accepted answer.
+
+Measured against the same fit driven by QMix, on real data:
+
+| run | `zt` | rms | time |
+|---|---|---|---|
+| QMix, 9 starts | 0.3612 − 0.5661j | 1.057e-3 | 145.2 s |
+| QPMix, same 9 starts | 0.3608 − 0.5630j | 1.056e-3 | **25.1 s** (5.8×) |
+| QPMix, seeded (3 starts) | 0.3608 − 0.5619j | 1.056e-3 | **5.6 s** (25.7×) |
+
+Impedance recovery follows the RF voltage-match method of Skalare (1989)
+and Withington *et al.* (1995).
 
 Three numerical pieces are reworked, and all three are faster *and* more
 accurate:
@@ -381,7 +425,7 @@ silence them.
 ## Testing and benchmarking
 
 ```bash
-uv run pytest                                  # 555 tests
+uv run pytest                                  # 598 tests
 uv run pytest -m "not reference"               # skip QMix cross-validation
 uv run pytest --cov=qpmix --cov-report=term    # with coverage
 QPMIX_DISABLE_JIT=1 uv run pytest              # exercise the NumPy fallback

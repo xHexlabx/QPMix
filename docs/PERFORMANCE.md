@@ -513,6 +513,67 @@ identical distortions and no analysis can separate them.  Real junctions
 have curvature near zero bias from leakage current, which breaks it — which
 is why `qpmix.exp.simulate` defaults to an I-V model that includes it.
 
+### Recovering the embedding circuit two ways
+
+`qpmix.exp` offers both routes to the Thevenin equivalent source:
+
+| | voltage matching (`zemb`) | current matching (`currentmatch`) |
+|---|---|---|
+| what is fitted | the load line through `(V_j, Z_j)` from Tucker theory | the *simulated pumped I-V curve* from full harmonic balance |
+| cost | closed form, ~20-140 ms | one harmonic balance per objective evaluation |
+| assumptions | one tone, no harmonics, invertible first photon step | none beyond the simulation itself |
+| bias window | first photon step only | any: first step, full subgap, full range, or per-step |
+| harmonics | fundamental only | fundamental plus higher harmonics |
+
+They are independent, so agreeing is evidence. On synthetic data with a
+known source they agree to `5e-3`; on the real 183.6 GHz measurement below
+they agree to `|dz| = 4e-3` normalized (0.04 Ω).
+
+### Measured on real data (183.6 GHz, `num_b = 100`, 226-point window)
+
+All four runs fit exactly the same cubic-spline-resampled grid, and every
+residual is re-evaluated on that grid, so the numbers are comparable:
+
+| run | `zt` (normalized) | rms | evaluations | time |
+|---|---|---|---|---|
+| QMix, 9 Nelder-Mead starts | 0.3612 − 0.5661j | 1.057 × 10⁻³ | 4 089 | **145.2 s** |
+| QPMix, same 9 starts | 0.3608 − 0.5630j | 1.056 × 10⁻³ | 4 052 | **25.1 s** (5.8×) |
+| QPMix API, grid of 9 | 0.3608 − 0.5619j | 1.056 × 10⁻³ | 3 577 | 22.8 s |
+| QPMix API, seeded (3 starts) | 0.3608 − 0.5619j | 1.056 × 10⁻³ | 781 | **5.6 s** (25.7×) |
+
+Swapping the engine alone is **5.8×**; seeding the optimiser from the
+closed-form voltage-match answer cuts nine starts to three for **25.7×**
+overall, at the same answer. One objective evaluation costs 32.2 ms in QMix
+and 5.9 ms in QPMix at `num_b = 100` — **5.4×**.
+
+### Choosing a solution by agreement, not by residual
+
+The residual surface has local minima and unphysical basins, so the lowest
+residual is not automatically the answer. QPMix runs each start
+independently, discards solutions that are not physically admissible
+(negative resistance, negative source voltage, runaway reactance) and takes
+the solution the surviving runs *agree* on, breaking ties by residual.
+
+On the real measurement above, the nine starts resolve as:
+
+| outcome | runs |
+|---|---|
+| `zt = 0.3676 − 0.6745j`, `vt = +0.360` — admissible | **5** |
+| `zt = −0.2173 − 0.0274j` — negative resistance | 3 |
+| same `zt`, `vt = −0.360` — negative source voltage | 1 |
+
+Four of the nine converge on something unphysical with a *lower* residual
+than the accepted answer. Taking the minimum would have returned one of
+them.
+
+### A bug this uncovered
+
+`harmonic_balance` printed its non-convergence warning unconditionally,
+ignoring `verbose` — inherited from QMix. A fit that calls it four thousand
+times then produces four thousand lines of warning. It is now gated on
+`verbose`, and non-convergence is reported through `mode="x"` instead, which
+`recover_zemb_current_match` counts and returns as `n_not_converged`.
+
 ---
 
 ## 7. Honest limitations
@@ -545,6 +606,17 @@ is why `qpmix.exp.simulate` defaults to an I-V model that includes it.
 * **The automatic shot-noise window search is a heuristic**, inherited from
   QMix. It works on well-behaved data, but supplying `vshot` explicitly is
   more reliable when Josephson features are present.
+* **Current matching is slow by construction** — seconds, against
+  milliseconds for voltage matching — because every objective evaluation is
+  a harmonic balance. Use voltage matching when its assumptions hold, and
+  current matching when they do not.
+* **`guesses="seeded"` trusts the voltage-match answer to be in the right
+  basin.** It was on the data measured here, but it explores less than the
+  nine-point grid; `guesses="grid"` remains the default for that reason.
+* **Residuals from different fits are only comparable on a common grid.**
+  Each recovery resamples the measured curve, so comparing the `err` fields
+  of two results fitted differently is meaningless — re-evaluate both on one
+  grid, as `notebooks/compare_qmix_vs_qpmix.py` does.
 * **The plotting-heavy parts of `qmix.exp.exp_data` are not ported** — the
   multi-panel report figures and the file-hierarchy helpers. The three most
   useful plots are provided; the rest is presentation code that is easier to

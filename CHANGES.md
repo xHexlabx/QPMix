@@ -182,6 +182,46 @@ Correctness and robustness fixes in the ported code:
   than silently ignored.
 - `matplotlib` is imported only inside the plotting methods.
 
+### Current-matching impedance recovery (`qpmix.exp.currentmatch`)
+
+A second, independent route to the Thevenin equivalent source. Where
+`qpmix.exp.zemb` fits the Tucker-theory load line in closed form, this fits
+the *simulated* pumped I-V curve from a full harmonic balance to the
+measured one. It makes no small-signal assumption, works on any bias window
+rather than only the first photon step, and extends to higher harmonics.
+
+- `voltage_windows` provides four strategies: `first_photon`,
+  `full_subgap`, `full_range` and `photon_steps` (one window per step, so
+  the widest does not dominate).
+- `harmonics=2` fits the embedding impedance at `2*f_LO` alongside the
+  fundamental. The equivalent code path in the source notebook this was
+  built from unpacks four parameters and then three from the same vector,
+  so it raises before it runs.
+- The solution is chosen by **agreement**, not by residual: each of nine
+  starting points is optimised independently, physically inadmissible
+  results (negative resistance, negative source voltage, runaway reactance)
+  are discarded, and the answer is the one the survivors converge on. On a
+  real 183.6 GHz measurement, four of nine starts reached something
+  unphysical with a *lower* residual than the accepted answer.
+- `guesses="seeded"` starts from the closed-form voltage-match answer,
+  replacing nine starts with three.
+
+Measured against the same fit driven by QMix, on real data (`num_b=100`,
+226-point window): the engine swap alone is 5.8x (145.2 s -> 25.1 s), and
+seeding brings it to 25.7x (5.6 s), at the same answer. One objective
+evaluation costs 32.2 ms in QMix and 5.9 ms in QPMix.
+
+Also added:
+
+- `qpmix.exp.check_offset` verifies that the offset correction worked, by
+  measuring the residual asymmetry of the curve against its own point
+  reflection. Returns numbers and a pass/fail, so it can be asserted on
+  rather than eyeballed.
+- `harmonic_balance` accepts a pre-computed `resp_matrix`, and no longer
+  prints its non-convergence warning when `verbose=False` -- inherited from
+  QMix, and unusable in a fitting loop that calls it four thousand times.
+  Non-convergence is reported through `mode="x"` instead.
+
 ### Not included in this release
 
 - The plotting-heavy parts of `qmix.exp.exp_data` (`plot_all`,
