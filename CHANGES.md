@@ -126,8 +126,66 @@ sum rule to 6e-13 and with each other to 1e-10.
   and the photon-number sum rule (independent analytic ground truths) and
   optional cross-validation against QMix itself.
 
+### Experimental data analysis (`qpmix.exp`)
+
+The `qmix.exp` subpackage is ported, with the numerics reworked:
+
+- **`qpmix.exp.tucker`** (new module): the Tucker-theory single-tone
+  currents, with every Bessel order evaluated in one call instead of a
+  Python loop, and `J_{-n} = (-1)^n J_n` halving the work again. 2.6-7.1x
+  faster, and validated against `qpmix.qtcurrent` to 1e-13 — an independent
+  check, since that engine derives the same currents by multi-tone spectral
+  domain analysis rather than Bessel sums.
+- **Drive-level recovery** is a safeguarded Newton iteration using the
+  analytic derivative `d/dalpha sum J_n^2 I_n = sum J_n (J_{n-1} - J_{n+1})
+  I_n`, bracketed by a coarse scan because the pumped I-V curve is not
+  monotonic in `alpha` everywhere. QMix takes 15 fixed bisection steps, so
+  it cannot resolve better than `alpha_max / 2**15`. 7.9-8.5x faster and
+  ~1e10 times more accurate.
+- **`qpmix.exp.zemb`** (new module): impedance recovery split out of the
+  data classes. The error surface is one broadcast expression rather than a
+  101x201 Python double loop (2.3-19.3x faster), and the grid minimum is
+  then polished with a bounded local optimiser, so the answer is no longer
+  quantised to the search grid.
+- **`qpmix.exp.simulate`** (new module): synthetic measurements built from
+  known parameters, so the analysis can be tested by round trip rather than
+  by comparison against another implementation. Includes a junction driven
+  through a real Thevenin source, solved self-consistently; the recovery
+  closes to better than 6e-3 in both `zt` and `vt`.
+- **`RespFnFromIVData`** now truncates at `vlimit` and continues ohmically,
+  which is what makes measured curves — which stop a few mV above the gap —
+  usable as response functions at all.
+
+Correctness and robustness fixes in the ported code:
+
+- The default normal-resistance fit range was `(3.5e-3, 5e3)` volts — five
+  *kilovolts* — contradicting QMix's own documentation. It is now
+  `(3.5e-3, 4.5e-3)`.
+- `qmix.exp.if_data` calls `numpy.seterr(divide='ignore', invalid='ignore')`
+  at import time, disabling those warnings for the whole interpreter. The
+  suppression is now scoped to the expressions that need it.
+- A flat shot-noise window made the correction factor infinite and silently
+  turned every downstream IF power into NaN. It is now detected and
+  reported.
+- The gap-voltage and subgap-resistance fits used fixed voltage windows that
+  could collapse to one or two points on a coarsely resampled curve, making
+  the polynomial fit singular. They now widen until conditioned.
+- Supplying both `voffset` and `ioffset` now uses them verbatim, as the
+  parameter documentation promises; QMix treats them only as a starting
+  guess and fits anyway.
+- The offset fit smooths before fitting, so it tolerates far more noise: the
+  recovered voltage offset stays within 1 uV up to 0.2% current noise, where
+  the unsmoothed fit has already failed completely.
+- Impedance recovery refuses a frequency above the gap frequency, where no
+  first photon step exists, instead of producing NaN.
+- Unknown keyword arguments are rejected with a spelling suggestion rather
+  than silently ignored.
+- `matplotlib` is imported only inside the plotting methods.
+
 ### Not included in this release
 
-- `qmix.exp` — the experimental data-analysis subpackage (`exp_data`,
-  `iv_data`, `if_data`, `clean_data`, `parameters`, `if_response`) has not
-  been ported.
+- The plotting-heavy parts of `qmix.exp.exp_data` (`plot_all`,
+  `plot_overall_results`, `plot_if_spectrum` and the file-hierarchy
+  helpers). `DCData.plot_dciv`, `PumpedData.plot_iv` and
+  `PumpedData.plot_noise_temp` are provided; the rest is presentation code
+  that is easier to write against the returned arrays.

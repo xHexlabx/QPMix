@@ -414,7 +414,108 @@ factor grows with `N`.
 
 ---
 
-## 6. Honest limitations
+## 6. Analyzing measured data
+
+`qpmix.exp` is the port of `qmix.exp`.  Three parts of it do real numerical
+work, and each is reworked.
+
+| Stage | QMix | QPMix | Complexity | Measured |
+|---|---|---|---|---|
+| Tucker-theory sums | Python loop over `2*num_b+1` Bessel orders, interpolating the response once per order | every order in one call; the response ladder interpolated once; `J_{-n} = (-1)^n J_n` halves the Bessel work | same order, ~40x fewer calls | **2.6–7.1×** |
+| Drive-level recovery | 15 fixed bisection steps | safeguarded Newton with the analytic derivative | 15 evaluations → ~5 | **7.9–8.5×** |
+| Impedance error surface | 101×201 Python double loop | one broadcast expression | same order, no interpreter overhead | **2.3–19.3×** |
+
+### Measured
+
+| Benchmark | QMix | QPMix | Speed-up |
+|---|---|---|---|
+| pumped I-V curve, 401 points | 2.22 ms | 0.81 ms | 2.7× |
+| AC current, 401 points | 5.90 ms | 0.83 ms | **7.1×** |
+| AC current, 4001 points | 52.9 ms | 7.60 ms | 7.0× |
+| recover alpha, 201 points | 19.0 ms | 2.40 ms | 7.9× |
+| recover alpha, 2001 points | 167 ms | 19.7 ms | **8.5×** |
+| error surface, 50 bias points | 154 ms | 7.97 ms | **19.3×** |
+| error surface, 500 bias points | 216 ms | 95.4 ms | 2.3× |
+
+### Accuracy: drive-level recovery
+
+Bisection over 15 steps cannot resolve better than `alpha_max / 2**15`.  The
+Newton iteration is not so limited:
+
+| true `alpha` | QMix error | QPMix error |
+|---|---|---|
+| 0.2 | 2.28 × 10⁻⁵ | **1.1 × 10⁻¹⁶** |
+| 0.8 | 2.27 × 10⁻⁵ | **4.4 × 10⁻¹⁶** |
+| 1.5 | 2.29 × 10⁻⁵ | **1.1 × 10⁻¹⁵** |
+| 2.2 | 2.28 × 10⁻⁵ | **5.7 × 10⁻¹⁴** |
+
+The derivative is free because the neighbouring Bessel orders are already
+needed for the AC current:
+
+```
+d/dalpha sum_n J_n(a)^2 I_n = sum_n J_n(a) (J_{n-1}(a) - J_{n+1}(a)) I_n
+```
+
+The pumped I-V curve is *not* monotonic in `alpha` everywhere — above the
+gap it falls, and past the first Bessel maximum it turns over — so Newton
+alone would run away.  A coarse scan locates the first upward crossing at
+each bias point first, and the iteration is bracketed by bisection.
+
+### Round-trip validation
+
+`qpmix.exp.simulate` builds measurements from known parameters, so the
+analysis can be tested by asking whether it recovers them.  Driving a
+junction through a known Thevenin source and recovering it from the pumped
+I-V curve alone closes to:
+
+| quantity | error |
+|---|---|
+| embedding impedance `zt` | < 6 × 10⁻⁴ |
+| embedding voltage `vt` | < 4 × 10⁻⁴ |
+| drive level `alpha` | < 1 × 10⁻⁹ |
+| fit residual | ~10⁻¹³ |
+
+### Bugs found in the ported code
+
+* **The normal-resistance fit range** defaults to `(3.5e-3, 5e3)` volts in
+  QMix — five kilovolts — which contradicts its own documentation
+  (`(3.5e-3, 4.5e-3)`).  In practice it fits from 3.5 mV to the end of the
+  data rather than over the intended 1 mV window.
+* **A flat shot-noise window** makes the Woody correction factor
+  `5.8 / slope` infinite, which then silently turns every downstream IF
+  power into NaN.  QPMix detects it and leaves the data in measured units.
+* **Fixed-width local fits.**  The gap-voltage and subgap-resistance fits
+  use hard-coded ±10 µV and ±100 µV windows, which collapse to one or two
+  points on a coarsely resampled curve and make the polynomial fit
+  singular.  QPMix widens the window until it holds enough samples.
+* **A global `numpy.seterr`** at import time in `qmix.exp.if_data` disables
+  divide and invalid warnings for the entire interpreter.
+
+### An improvement worth its own note
+
+The offset fit works by making the I-V curve overlap its own point
+reflection.  Smoothing the data first costs almost nothing — the offset is a
+bulk property, and Gaussian smoothing is symmetric so it commutes with the
+reflection — but it changes the noise tolerance completely:
+
+| current noise | QMix (unsmoothed) | QPMix |
+|---|---|---|
+| 0 | ~0 µV | < 1 µV |
+| 5 × 10⁻⁴ | 70 µV | < 1 µV |
+| 2 × 10⁻³ | 80 µV (total failure) | < 1 µV |
+| 5 × 10⁻³ | 80 µV (total failure) | 11 µV |
+
+against a true offset of 80 µV.
+
+Note also a genuine degeneracy, independent of implementation: if the subgap
+region is *perfectly ohmic*, a voltage offset and a current offset produce
+identical distortions and no analysis can separate them.  Real junctions
+have curvature near zero bias from leakage current, which breaks it — which
+is why `qpmix.exp.simulate` defaults to an I-V model that includes it.
+
+---
+
+## 7. Honest limitations
 
 * **Response-function construction is ~1.8× slower** than QMix. It is a
   one-off cost, and it is what pays for the evaluation speed-up.
@@ -438,3 +539,13 @@ factor grows with `N`.
 * **The continuum study measures one observable** (the pumped DC I-V curve)
   for one band shape. A different observable — mixer gain, noise
   temperature — may need more tones before it settles.
+* **Offset recovery needs subgap curvature.** With a perfectly ohmic subgap
+  region the voltage and current offsets are mathematically degenerate; see
+  §6.
+* **The automatic shot-noise window search is a heuristic**, inherited from
+  QMix. It works on well-behaved data, but supplying `vshot` explicitly is
+  more reliable when Josephson features are present.
+* **The plotting-heavy parts of `qmix.exp.exp_data` are not ported** — the
+  multi-panel report figures and the file-hierarchy helpers. The three most
+  useful plots are provided; the rest is presentation code that is easier to
+  write against the returned arrays.

@@ -36,9 +36,10 @@ What is new here:
 | Current summation | nested loops, single-threaded | cache-blocked and parallel, plus an FFT-correlation path |
 | Harmonic balance | Jacobian rebuilt every iteration | Broyden rank-1 updates, batched solve, line search |
 | Number of tones | hard-capped at 4 (memory grows as `(2·num_b+1)^F`) | unlimited, via a common frequency grid (memory linear in `F`) |
+| Measured-data analysis | Bessel loops, 15 bisection steps, a 20 301-point double loop | vectorised sums, Newton with an analytic derivative, one broadcast |
 | numba | required | optional, with a vectorised NumPy fallback |
 | Packaging | `setup.py`, conda `environment.yml` | `pyproject.toml`, `uv`, `src/` layout |
-| Tests | 1 705 lines | 376 tests, per module, plus Tucker-theory validation |
+| Tests | 1 705 lines | 555 tests, per module, plus analytic validation |
 
 A complete two-tone mixer simulation runs about **6× faster**, and the
 individual stages are 3–160× faster — see [Performance](#performance).
@@ -278,6 +279,64 @@ i_if = qpmix.qtcurrent(vj, cct, resp, f_if, num_b=15)
 
 ---
 
+## Analyzing measured data
+
+`qpmix.exp` turns laboratory measurements into physics. Give it a DC I-V
+curve, a pumped I-V curve and a hot/cold IF measurement, and it recovers the
+junction parameters, the embedding circuit and the noise temperature:
+
+```python
+from qpmix.exp import DCData, PumpedData
+
+dciv = DCData(dc_iv_array, dc_if_array)              # two-column arrays
+pumped = PumpedData(pumped_iv_array, dciv,
+                    if_hot_array, if_cold_array, freq=230.0)
+
+dciv.vgap, dciv.rn, dciv.rsg      # gap voltage, normal and subgap resistance
+pumped.zt, pumped.vt              # recovered embedding circuit
+pumped.alpha, pumped.zw           # drive level and junction impedance
+pumped.tn_best, pumped.g_db       # noise temperature and gain
+```
+
+The import pipeline corrects the voltage/current offset, removes a series
+resistance, and filters the curve by rotating it so the gap transition is
+not smeared. Impedance recovery uses the RF voltage-match method of Skalare
+(1989) and Withington *et al.* (1995).
+
+Three numerical pieces are reworked, and all three are faster *and* more
+accurate:
+
+| | QMix | QPMix | speed | accuracy |
+|---|---|---|---|---|
+| Tucker-theory sums | Python loop over Bessel orders | every order in one call; `J_{-n} = (-1)^n J_n` halves the work | **2.6–7.1×** | identical |
+| Drive-level recovery | 15 fixed bisection steps | safeguarded Newton with an analytic derivative | **7.9–8.5×** | **~10¹⁰× closer** |
+| Impedance error surface | 101×201 Python double loop | one broadcast, then an off-grid polish | **2.3–19.3×** | not tied to the grid |
+
+Bisection over 15 steps cannot do better than `alpha_max / 2**15 ≈ 5e-5`;
+the Newton iteration reaches machine precision.
+
+### Testing without measured data
+
+`qpmix.exp.simulate` builds synthetic measurements from *known* parameters
+and then adds the distortions a real one has — offset, series resistance,
+gain errors, a hysteretic double sweep, noise. The test suite is therefore a
+round trip: feed in a junction fed by a known Thevenin source, and check the
+analysis recovers it.
+
+```python
+from qpmix.exp.simulate import simulate_dciv, simulate_embedded_iv
+
+dciv = DCData(simulate_dciv(vgap=2.8e-3, rn=14.0), verbose=False)
+raw = simulate_embedded_iv(vt=0.35, zt=0.4 - 0.3j, freq=230.0)
+pumped = PumpedData(raw, dciv, freq=230.0, verbose=False)
+# pumped.zt -> 0.4000-0.3000j,  pumped.vt -> 0.3503
+```
+
+That round trip closes to better than `6e-3` in both quantities, and the
+drive level to `1e-9`.
+
+---
+
 ## Units
 
 Everything is normalized, as in QMix:
@@ -308,6 +367,7 @@ harmonic index `p` runs 1…`num_p`, with index 0 reserved for DC.
 | `qtcurrent` | tunneling current at any set of frequencies |
 | `interpolate_respfn` | pre-interpolate the response function to reuse across calls |
 | `ToneGrid`, `qtcurrent_grid` | the common-grid engine for many tones (`qpmix.multitone`) |
+| `qpmix.exp.DCData`, `PumpedData` | import and analyze measured data |
 | `calculate_phase_factor_coeff` | phase-factor spectrum coefficients |
 | `check_hb_error` | independently verify a harmonic balance solution |
 | `read_circuit` | load a circuit from JSON or the legacy text format |
@@ -321,7 +381,7 @@ silence them.
 ## Testing and benchmarking
 
 ```bash
-uv run pytest                                  # 376 tests
+uv run pytest                                  # 555 tests
 uv run pytest -m "not reference"               # skip QMix cross-validation
 uv run pytest --cov=qpmix --cov-report=term    # with coverage
 QPMIX_DISABLE_JIT=1 uv run pytest              # exercise the NumPy fallback
@@ -330,6 +390,7 @@ uv run python benchmarks/bench_all.py          # QMix vs QPMix, stage by stage
 uv run python benchmarks/bench_method.py       # direct vs FFT cost model
 uv run python benchmarks/bench_multitone.py    # scaling with the tone count
 uv run python benchmarks/study_continuum.py    # how many tones make a continuum
+uv run python benchmarks/bench_exp.py          # experimental-data analysis
 ```
 
 The test suite is not only a comparison against QMix. The key checks are

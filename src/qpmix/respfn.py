@@ -88,6 +88,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "kk_n": KK_N_DEFAULT,
     "dv": DV_DEFAULT,
     "vrange": VRANGE,
+    "vlimit": 1.8,
 }
 
 
@@ -411,20 +412,26 @@ class RespFn:
 
 
 class RespFnFromIVData(RespFn):
-    """Response function built from arbitrary DC I-V data.
+    """Response function built from measured DC I-V data.
 
-    Unlike :class:`RespFn`, the input does not need to be uniformly spaced
-    or to start at zero: it is cleaned and resampled first.
+    Unlike :class:`RespFn`, the input need not be uniformly spaced, start at
+    zero, or extend far past the gap: it is cleaned, truncated at
+    ``vlimit``, and extended ohmically from there.  Measured curves stop a
+    few millivolts above the gap, while the response function has to be
+    evaluated out to tens of gap voltages, so that extension is what makes
+    measured data usable at all.
 
     Args:
         voltage (ndarray): Normalized DC bias voltage.
         current (ndarray): Normalized DC tunneling current.
 
     Keyword Args:
+        vlimit (float): Use the measured data up to this normalized bias
+            voltage, and extend ohmically above it.  Default is 1.8.
         **kwargs: See :class:`RespFn`.
 
     Raises:
-        ValueError: If the data does not extend past ``v = 5``.
+        ValueError: If the data does not reach ``vlimit``.
 
     """
 
@@ -437,14 +444,24 @@ class RespFnFromIVData(RespFn):
         keep = np.r_[True, np.diff(voltage) > 0]
         voltage, current = voltage[keep], current[keep]
 
-        if voltage.max() <= 5:
-            raise ValueError("Voltage must extend to at least 5.")
-
         opts = _default_params(kwargs)
+        vlimit = opts["vlimit"]
+        if voltage.max() < vlimit:
+            raise ValueError(
+                f"I-V data only reaches v={voltage.max():.2f}, but it must "
+                f"reach vlimit={vlimit}. Lower 'vlimit' or supply more data."
+            )
+
+        # Keep the measured curve up to vlimit, then continue with the
+        # ohmic asymptote it has reached there.
+        mask = (voltage > 0) & (voltage < vlimit)
+        voltage, current = voltage[mask], current[mask]
+        offset = current[-1] - voltage[-1]
+
         grid = np.arange(0.0, opts["vrange"] + opts["dv"] / 2, opts["dv"])
-        spline = InterpolatedUnivariateSpline(voltage, current, k=3)
-        resampled = np.asarray(spline(grid), dtype=float)
-        resampled[grid > voltage.max()] = grid[grid > voltage.max()]
+        resampled = np.interp(grid, voltage, current)
+        beyond = grid >= voltage[-1]
+        resampled[beyond] = grid[beyond] + offset
 
         super().__init__(grid, resampled, **kwargs)
 

@@ -185,10 +185,19 @@ def test_respfn_rejects_mismatched_shapes():
         RespFn(np.linspace(0, 10, 101), np.zeros(100), verbose=False)
 
 
-def test_from_iv_data_rejects_short_data():
-    v = np.linspace(0, 3, 101)
-    with pytest.raises(ValueError, match="at least 5"):
+def test_from_iv_data_rejects_data_that_stops_below_vlimit():
+    v = np.linspace(0, 1.5, 101)
+    with pytest.raises(ValueError, match="vlimit"):
         RespFnFromIVData(v, iv.polynomial(v, 30), verbose=False)
+
+
+def test_from_iv_data_extends_ohmically_above_vlimit():
+    """Measured curves stop just above the gap; the response function has to
+    reach tens of gap voltages, so the tail is continued ohmically."""
+    v = np.linspace(0, 2.0, 2001)
+    resp = RespFnFromIVData(v, iv.polynomial(v, 30), verbose=False)
+    far = np.array([10.0, 20.0, 30.0])
+    assert np.abs(resp.idc(far) - far).max() < 1e-3
 
 
 def test_unknown_keyword_is_rejected():
