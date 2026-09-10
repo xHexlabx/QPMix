@@ -65,6 +65,24 @@ numbering follow QMix; the numerical methods, packaging and tests are new.
     frequency error it introduces, refuses to allocate a grid that closely
     spaced tones would blow up, and takes a `max_num_k` budget as the cost
     knob (`max_denominator` is *not* monotonic in cost).
+- `harmonic_balance` takes the same `method` argument, so it can reach the
+  grid engine too. This is what actually makes many tones practical:
+  harmonic balance is `2*num_f*num_p + 1` current solves per Jacobian and
+  dominates the run time completely -- at four tones, roughly fifty times
+  one `qtcurrent` call. One objective evaluation on a real junction, tones
+  on a coarse comb:
+
+      tones  num_b     QMix   multi-D      grid   grid vs QMix
+          2     15    78 ms     15 ms     29 ms           2.7x
+          3      9   799 ms    184 ms     50 ms          16.0x
+          4      6  7337 ms   1955 ms     82 ms          89.9x
+          5      6  refuses     96 GB    125 ms              -
+          6      6  refuses   2989 GB    205 ms              -
+
+  The multi-dimensional path alone is only 3.8-5.1x faster than QMix and the
+  margin shrinks as tones are added, since both engines are then bandwidth
+  bound on the same exponentially growing array. The grid engine's cost is
+  nearly flat in the tone count, so its advantage grows without limit.
 - `EmbeddingCircuit` no longer caps `num_f` at four.
 - `benchmarks/bench_multitone.py` measures the scaling;
   `benchmarks/study_continuum.py` answers how many tones make a band a

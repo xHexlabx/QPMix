@@ -480,6 +480,44 @@ def test_circuit_still_rejects_nonsense_tone_counts():
 # -- harmonic balance --------------------------------------------------
 
 
+def test_harmonic_balance_grid_matches_direct(resp_poly):
+    """Two tones give the same tuple set either way, so the two engines must
+    agree exactly."""
+    cct = _circuit(2, npts=31)
+    for f in (1, 2):
+        cct.vt[f, 1] = 0.3
+        cct.zt[f, 1] = 0.3 - 0.3j
+    kwargs = dict(num_b=7, verbose=False, stop_rerror=1e-6)
+    direct = qpmix.harmonic_balance(cct, resp_poly, method="direct", **kwargs)
+    grid = qpmix.harmonic_balance(cct, resp_poly, method="grid", **kwargs)
+    assert np.abs(direct - grid).max() < 1e-9
+
+
+def test_harmonic_balance_grid_is_what_makes_many_tones_practical(resp_poly):
+    """Harmonic balance is dominated by current evaluations, so it has to be
+    able to reach the grid engine too -- otherwise the multi-dimensional
+    response matrix is rebuilt on every iteration however fast qtcurrent is.
+    """
+    cct = _circuit(4, npts=21)
+    for f in range(1, 5):
+        cct.vt[f, 1] = 0.15
+        cct.zt[f, 1] = 0.3 - 0.3j
+    vj = qpmix.harmonic_balance(
+        cct, resp_poly, num_b=5, verbose=False, method="grid", stop_rerror=1e-4
+    )
+    assert vj.shape == (5, 2, 21)
+    assert np.all(np.isfinite(vj))
+
+
+def test_harmonic_balance_rejects_too_many_tones_for_the_direct_engine(resp_poly):
+    cct = _circuit(5, npts=11)
+    for f in range(1, 6):
+        cct.vt[f, 1] = 0.1
+        cct.zt[f, 1] = 0.3
+    with pytest.raises(ValueError, match="at most 4 tones"):
+        qpmix.harmonic_balance(cct, resp_poly, num_b=5, verbose=False, method="direct")
+
+
 @pytest.mark.parametrize("num_f", [5, 8])
 def test_harmonic_balance_solves_many_tone_circuits(resp_poly, num_f):
     cct = _circuit(num_f, npts=21)

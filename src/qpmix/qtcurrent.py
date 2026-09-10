@@ -258,6 +258,12 @@ def interpolate_respfn(
         if grid is None:
             grid = ToneGrid.from_circuit(cct, num_b=num_b)
         return interpolate_respfn_grid(cct, resp, grid)
+    if cct.num_f > MAX_DIRECT_TONES:
+        raise ValueError(
+            f"method={method!r} supports at most {MAX_DIRECT_TONES} tones; "
+            f"this circuit has {cct.num_f}. Use method='auto' or 'grid' to "
+            f"run it through qpmix.multitone."
+        )
     nb_list = _as_nb_tuple(num_b, cct.num_f)
     return build_resp_matrix(resp, cct.vb, cct.freq, nb_list)
 

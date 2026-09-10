@@ -39,7 +39,7 @@ What is new here:
 | Measured-data analysis | Bessel loops, 15 bisection steps, a 20 301-point double loop | vectorised sums, Newton with an analytic derivative, one broadcast |
 | numba | required | optional, with a vectorised NumPy fallback |
 | Packaging | `setup.py`, conda `environment.yml` | `pyproject.toml`, `uv`, `src/` layout |
-| Tests | 1 705 lines | 601 tests, per module, plus analytic validation |
+| Tests | 1 705 lines | 607 tests, per module, plus analytic validation |
 
 A complete two-tone mixer simulation runs about **6× faster**, and the
 individual stages are 3–160× faster — see [Performance](#performance).
@@ -174,7 +174,12 @@ one and makes memory grow *linearly* with the tone count:
 | 24 | 4 644 | 56.8 MB | 699 ms | 2.9 × 10²⁵ GB |
 
 A full 16-tone harmonic balance takes 8.7 s — a quarter of what four tones
-used to cost. The grid is **opt-in below five tones** (`method="grid"`),
+used to cost. `harmonic_balance` takes the same `method` argument, which is
+what makes this reachable: it is `2·num_f·num_p + 1` current solves per
+Jacobian and dominates the run time, so a fast `qtcurrent` alone is not
+enough. One objective evaluation on a real junction with tones on a coarse
+comb costs 7.3 s in QMix, 2.0 s through QPMix's multi-dimensional path, and
+**82 ms** through the grid — 90×. The grid is **opt-in below five tones** (`method="grid"`),
 because it also sums intermodulation products that the multi-dimensional
 engine truncates at `±num_p`, so switching automatically would change
 results rather than only run times.
@@ -432,7 +437,7 @@ silence them.
 ## Testing and benchmarking
 
 ```bash
-uv run pytest                                  # 601 tests
+uv run pytest                                  # 607 tests
 uv run pytest -m "not reference"               # skip QMix cross-validation
 uv run pytest --cov=qpmix --cov-report=term    # with coverage
 QPMIX_DISABLE_JIT=1 uv run pytest              # exercise the NumPy fallback

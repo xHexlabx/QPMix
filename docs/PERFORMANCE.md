@@ -309,6 +309,10 @@ Head to head, over the tone counts both engines support:
 | 3 | 297 | 238 595 | 2 750 459 | 10.8 ms | 29.5 ms | **2.7×** |
 | 4 | 414 | 332 429 | 52 258 721 | 16.2 ms | 1 142 ms | **70.7×** |
 
+These are `qtcurrent` alone.  A full simulation also runs harmonic balance,
+which dominates; see *Harmonic balance is what decides whether many tones
+are practical* below for the end-to-end numbers.
+
 Past the wall, where there is no alternative:
 
 | tones | `num_k` | grid memory | `qtcurrent` | multi-D would need |
@@ -329,6 +333,56 @@ Full simulations, not just one current evaluation:
 | 16 | 22.9 s | **8.69 s** |
 
 Sixteen tones now cost a quarter of what four used to.
+
+### Harmonic balance is what decides whether many tones are practical
+
+A recovery fit, or any simulation, spends its time in one place: a harmonic
+balance followed by a current evaluation.  Harmonic balance is itself
+`2·num_f·num_p + 1` current solves per Jacobian, so it dominates completely
+— at four tones one harmonic balance costs about fifty times one
+`qtcurrent` call.
+
+That means making `qtcurrent` fast is not enough.  Until
+`harmonic_balance` could reach the grid engine, the whole multi-tone
+advantage was invisible: the response matrix was rebuilt multi-dimensionally
+on every iteration however fast the summation was.  `harmonic_balance` now
+takes the same `method` argument, and the picture changes completely.
+
+One objective evaluation (harmonic balance + `qtcurrent`), real junction,
+226 bias points, tones on a coarse comb:
+
+| tones | `num_b` | QMix | QPMix multi-D | QPMix **grid** | grid vs QMix |
+|---|---|---|---|---|---|
+| 2 | 15 | 78.3 ms | 15.2 ms (5.1×) | 29.0 ms | 2.7× |
+| 3 | 9 | 799 ms | 184 ms (4.3×) | **49.8 ms** | **16.0×** |
+| 4 | 6 | 7 337 ms | 1 955 ms (3.8×) | **81.6 ms** | **89.9×** |
+| 5 | 6 | *refuses* | 1.3 GB of matrix | 125 ms | — |
+| 6 | 6 | *refuses* | 16.3 GB | 205 ms | — |
+
+The multi-dimensional path alone is only 3.8–5.1× faster than QMix, and the
+margin *shrinks* as tones are added — both engines are then bandwidth-bound
+on the same exponentially growing array.  The grid engine is what breaks
+that: its cost is nearly flat in the tone count (50 → 82 → 125 → 205 ms from
+three to six tones), so the advantage grows without limit.
+
+At realistic `num_b = 15`, five tones would need 96 GB of response matrix
+and six would need 2 989 GB.  The grid engine does them in 125 ms and 205 ms.
+
+### The grid engine depends on the frequencies, not the tone count
+
+`num_k` is set by the grid multipliers.  Repeating the table above with the
+*measured* LO frequencies (0.2639, 0.2879, … — arbitrary reals, so the
+common grid is very fine) instead of a commensurate comb:
+
+| tones | `num_b` | QPMix multi-D | QPMix grid |
+|---|---|---|---|
+| 2 | 15 | 13.7 ms | 1 019 ms |
+| 3 | 9 | 169 ms | 1 615 ms |
+| 4 | 6 | 1 851 ms | 3 697 ms |
+
+The grid engine is 10–75× *slower* there.  So the choice is not "how many
+tones" but "are the tones commensurate on a coarse grid": a harmonic comb or
+an evenly channelised band, yes; an LO and an RF signal a few MHz apart, no.
 
 ### Why the grid is opt-in below five tones
 

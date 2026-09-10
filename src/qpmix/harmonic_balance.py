@@ -55,7 +55,12 @@ from timeit import default_timer as timer
 
 import numpy as np
 
-from qpmix.qtcurrent import ROUND_FREQ, interpolate_respfn, qtcurrent
+from qpmix.qtcurrent import (
+    MAX_DIRECT_TONES,
+    ROUND_FREQ,
+    interpolate_respfn,
+    qtcurrent,
+)
 
 __all__ = ["check_hb_error", "harmonic_balance"]
 
@@ -81,6 +86,7 @@ def harmonic_balance(
     jacobian: str = "broyden",
     line_search: bool = True,
     resp_matrix: np.ndarray | None = None,
+    method: str = "auto",
 ):
     """Solve for the junction voltage that balances the circuit.
 
@@ -118,6 +124,13 @@ def harmonic_balance(
             Default is ``"broyden"``.
         line_search (bool, optional): Backtrack a step that would increase
             the residual.  Default is True.
+        method (str, optional): Which engine evaluates the tunneling
+            currents -- see :func:`qpmix.qtcurrent.qtcurrent`.  Harmonic
+            balance is dominated by those evaluations, so this is what
+            decides whether a many-tone solve is practical: ``"grid"``
+            switches to the common-grid engine, which is worth it from about
+            three tones on a coarse frequency grid, and is the only option
+            above four.  Default is ``"auto"``.
         resp_matrix (ndarray, optional): A pre-computed response matrix from
             :func:`qpmix.qtcurrent.interpolate_respfn`.  It depends only on
             the bias sweep, the tone frequencies and ``num_b`` -- none of
@@ -179,13 +192,28 @@ def harmonic_balance(
         print(f" - {num_n * 2 + 1} qtcurrent call(s) for the first iteration")
         print(f" - max. iterations: {max_it}")
 
+    # The response matrix and the current evaluations must use the same
+    # engine, and for the grid engine the same grid, or their array shapes
+    # will not match.  Resolve it once here.
+    grid = None
+    if method == "grid" or (method == "auto" and num_f > MAX_DIRECT_TONES):
+        from qpmix.multitone import ToneGrid
+
+        grid = ToneGrid.from_circuit(cct, num_b=num_b)
     respfn_interp = (
-        interpolate_respfn(cct, resp, num_b) if resp_matrix is None else resp_matrix
+        interpolate_respfn(cct, resp, num_b, method=method, grid=grid)
+        if resp_matrix is None
+        else resp_matrix
     )
     freq_list = _hb_freq_list(cct)
+    current_kwargs = {} if grid is None else {"grid": grid}
+    if method != "auto":
+        current_kwargs["method"] = method
 
     def residual(vj: np.ndarray) -> np.ndarray:
-        ij = _qt_current_for_hb(vj, cct, resp, num_b, respfn_interp, freq_list)
+        ij = _qt_current_for_hb(
+            vj, cct, resp, num_b, respfn_interp, freq_list, current_kwargs
+        )
         return vt_2d[:, None] - zt_2d[:, None] * ij - vj
 
     # inv_j[p, q, i]: the inverse Jacobian at each bias point, in the
@@ -270,7 +298,9 @@ def _hb_freq_list(cct) -> list[float]:
     ]
 
 
-def _qt_current_for_hb(vj_2d, cct, resp, num_b, resp_matrix, freq_list):
+def _qt_current_for_hb(
+    vj_2d, cct, resp, num_b, resp_matrix, freq_list, current_kwargs=None
+):
     """Tunneling current at every tone and harmonic, in signal-index form.
 
     Args:
@@ -280,6 +310,8 @@ def _qt_current_for_hb(vj_2d, cct, resp, num_b, resp_matrix, freq_list):
         num_b (int or tuple): Summation limit.
         resp_matrix (ndarray): Pre-interpolated response function.
         freq_list (list): Output frequencies, from :func:`_hb_freq_list`.
+        current_kwargs (dict, optional): Engine selection forwarded to
+            :func:`qpmix.qtcurrent.qtcurrent`.  Default is None.
 
     Returns:
         ndarray: Tunneling current, shape ``(num_n, npts)``.
@@ -288,7 +320,14 @@ def _qt_current_for_hb(vj_2d, cct, resp, num_b, resp_matrix, freq_list):
     vj = np.zeros((cct.num_f + 1, cct.num_p + 1, cct.vb_npts), dtype=complex)
     vj[1:, 1:, :] = vj_2d.reshape((cct.num_f, cct.num_p, cct.vb_npts))
     return qtcurrent(
-        vj, cct, resp, freq_list, num_b, verbose=False, resp_matrix=resp_matrix
+        vj,
+        cct,
+        resp,
+        freq_list,
+        num_b,
+        verbose=False,
+        resp_matrix=resp_matrix,
+        **(current_kwargs or {}),
     )
 
 
