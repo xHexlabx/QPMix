@@ -48,8 +48,8 @@ numbering follow QMix; the numerical methods, packaging and tests are new.
   `assert num_f in [1, 2, 3, 4]`. Placing every tone on a shared frequency
   grid collapses the multi-dimensional summation index to a single one, so
   the response matrix holds `(2*num_k + 1) * npts` values instead of
-  `(2*num_b + 1)**num_f * npts` — **linear in the tone count rather than
-  exponential**. The phase factor is still one FFT, however many tones it
+  `(2*num_b + 1)**num_f * npts` — **polynomial in the tone count rather than
+  exponential** (`num_k ~ F^1.35`, end-to-end time `~F^3.0`, against `13^F`). The phase factor is still one FFT, however many tones it
   contains, and the current summation reduces to the one-dimensional
   correlation the single-tone kernel already implements.
   - 70x faster than the multi-dimensional engine at four tones, 2.7x at
@@ -82,7 +82,8 @@ numbering follow QMix; the numerical methods, packaging and tests are new.
   The multi-dimensional path alone is only 3.8-5.1x faster than QMix and the
   margin shrinks as tones are added, since both engines are then bandwidth
   bound on the same exponentially growing array. The grid engine's cost is
-  nearly flat in the tone count, so its advantage grows without limit.
+  polynomial in the tone count instead (`num_k ~ F^1.35`, end-to-end time
+  `~F^3.0`), so its advantage grows without limit.
 - `EmbeddingCircuit` no longer caps `num_f` at four.
 - `benchmarks/bench_multitone.py` measures the scaling;
   `benchmarks/study_continuum.py` answers how many tones make a band a

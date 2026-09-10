@@ -293,10 +293,26 @@ implements.
 
 | | multi-dimensional | common grid |
 |---|---|---|
-| response-matrix entries | `(2B+1)^F * N` | `(2K+1) * N` |
-| growth in tone count `F` | **exponential** | **linear** |
+| response-matrix entries | `(2B+1)^F * N` | `(2K+1) * N`, `K = Σ n_f · B` |
+| growth in tone count `F` | **exponential**, `~13^F` | **polynomial**: `K ~ F^1.35`, end-to-end time `~F^3.0` |
 | growth at fixed bandwidth | — | `K ~ F**2` (measured `N^2.15`) |
 | set by | `num_b` | the grid multipliers `n_f` |
+
+The end-to-end exponent is higher than `K`'s because each harmonic-balance
+iteration evaluates the current at `~F` output frequencies and needs
+`2·num_f·num_p + 1` residuals per Jacobian. Measured, for tones 0.02 apart
+at `num_b = 6` and 226 bias points:
+
+| tones | `K` | grid memory | per iteration | multi-D would need |
+|---|---|---|---|---|
+| 4 | 276 | 1.9 MB | 20 ms | 98 MB |
+| 8 | 648 | 4.5 MB | 109 ms | 3 TB |
+| 12 | 1 116 | 7.7 MB | 424 ms | 76 621 TB |
+| 16 | 1 680 | 11.6 MB | 1.10 s | 2.2 × 10⁹ TB |
+| 24 | 3 096 | 21.4 MB | 4.00 s | 1.8 × 10¹⁸ TB |
+
+Polynomial against exponential is the whole difference; "nearly flat in the
+tone count" would be overstating it.
 
 ### Measured (`npts=401`, `num_b=9`, tones 0.02 apart)
 
@@ -362,8 +378,9 @@ One objective evaluation (harmonic balance + `qtcurrent`), real junction,
 The multi-dimensional path alone is only 3.8–5.1× faster than QMix, and the
 margin *shrinks* as tones are added — both engines are then bandwidth-bound
 on the same exponentially growing array.  The grid engine is what breaks
-that: its cost is nearly flat in the tone count (50 → 82 → 125 → 205 ms from
-three to six tones), so the advantage grows without limit.
+that: its cost grows polynomially instead (50 → 82 → 125 → 205 ms from three
+to six tones; `~F^3.0` measured out to 24), so the advantage grows without
+limit.
 
 At realistic `num_b = 15`, five tones would need 96 GB of response matrix
 and six would need 2 989 GB.  The grid engine does them in 125 ms and 205 ms.

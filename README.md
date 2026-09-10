@@ -35,7 +35,7 @@ What is new here:
 | Response matrix | voltage array materialised, then interpolated | fused, thread-parallel, no temporaries |
 | Current summation | nested loops, single-threaded | cache-blocked and parallel, plus an FFT-correlation path |
 | Harmonic balance | Jacobian rebuilt every iteration | Broyden rank-1 updates, batched solve, line search |
-| Number of tones | hard-capped at 4 (memory grows as `(2·num_b+1)^F`) | unlimited, via a common frequency grid (memory linear in `F`) |
+| Number of tones | hard-capped at 4 (memory grows as `(2·num_b+1)^F`) | unlimited, via a common frequency grid (cost polynomial in `F`, not exponential) |
 | Measured-data analysis | Bessel loops, 15 bisection steps, a 20 301-point double loop | vectorised sums, Newton with an analytic derivative, one broadcast |
 | numba | required | optional, with a vectorised NumPy fallback |
 | Packaging | `setup.py`, conda `environment.yml` | `pyproject.toml`, `uv`, `src/` layout |
@@ -65,7 +65,7 @@ bought. Symbols: `F` tones, `P` harmonics, `B` = `num_b`, `N` bias points,
 | **Kramers–Kronig transform** | `scipy.signal.hilbert`, complex FFT, arbitrary length | real-input `rfft`/`irfft` on a 5-smooth length | same order, ~2× fewer flops | **2.8–13.6×** |
 | **Gaussian smoothing** | `numpy.convolve`, always direct | FFT convolution for wide kernels, auto-selected | `O(N·W)` → **`O(N log N)`** | used in setup |
 | **JIT strategy** | eager signatures, compiled at import | lazy compilation, cached on disk; numba **optional** | — | fast `import qpmix` |
-| **Tone count** | one summation index per tone, capped at 4 | all tones on a common frequency grid, single index | `(2B+1)^F·N` → **`(2K+1)·N`** (exponential → linear in `F`) | **70×** at 4 tones; 24 tones now possible at all |
+| **Tone count** | one summation index per tone, capped at 4 | all tones on a common frequency grid, single index | `(2B+1)^F·N` → **`(2K+1)·N`**, with `K ~ F^1.35` (exponential → polynomial) | **90×** at 4 tones; 24 tones now possible at all |
 
 **Bottom line: a complete two-tone mixer simulation runs ~6× faster, and is
 ~8× closer to the exact answer.**
@@ -163,8 +163,8 @@ fast · batched `numpy.linalg` and `einsum` in harmonic balance.
 QMix asserts `num_f in [1, 2, 3, 4]`, because the response matrix holds
 `(2·num_b+1)^num_f · npts` complex values — 5.9 GB at four tones, 184 GB at
 five. `qpmix.multitone` lifts the cap by placing every tone on a common
-frequency grid, which collapses the multi-dimensional index to a single
-one and makes memory grow *linearly* with the tone count:
+frequency grid, which collapses the multi-dimensional index to a single one
+and turns the growth from *exponential* into *polynomial*:
 
 | tones | `num_k` | grid memory | `qtcurrent` | multi-D would need |
 |---|---|---|---|---|
@@ -194,6 +194,44 @@ i = qpmix.qtcurrent(vj, cct, resp, freqs, num_b=9)     # auto-selects the grid
 from qpmix.multitone import ToneGrid
 print(ToneGrid.from_circuit(cct, num_b=9).report(401))  # costs, before you commit
 ```
+
+### Which engine to use
+
+The limit moves, it does not disappear. `num_k = Σ_f n_f · num_b` is set by
+the grid *multipliers*, so what decides the cost is not how many tones there
+are but how finely spaced they are:
+
+| situation | use |
+|---|---|
+| 1–2 tones | **multi-D** — the grid is slower here |
+| 3–4 tones, tones on a coarse grid | **grid** (`method="grid"`) — 16–90× faster than QMix |
+| 3–4 tones, arbitrary measured frequencies | **multi-D** — the grid is 10–75× *slower* |
+| ≥5 tones, tones on a coarse grid | **grid** — the only option, and it genuinely works |
+| ≥5 tones, closely spaced tones | neither; `ToneGrid.from_circuit` refuses and says why |
+
+An LO and an RF signal 5 MHz apart at 230 GHz need multipliers
+`(46000, 46001)` and `num_k = 1.4 × 10⁶`: many tones are unlocked, fine
+frequency resolution is not.
+
+Measured end to end (harmonic balance + `qtcurrent`, tones 0.02 apart,
+`num_b = 6`, 226 bias points):
+
+| tones | `num_k` | grid memory | per iteration | multi-D would need |
+|---|---|---|---|---|
+| 4 | 276 | 1.9 MB | 20 ms | 98 MB |
+| 8 | 648 | 4.5 MB | 109 ms | 3 TB |
+| 12 | 1 116 | 7.7 MB | 424 ms | 76 621 TB |
+| 16 | 1 680 | 11.6 MB | 1.10 s | 2.2 × 10⁹ TB |
+| 24 | 3 096 | 21.4 MB | 4.00 s | 1.8 × 10¹⁸ TB |
+
+giving `num_k ~ N^1.35` and `time ~ N^3.0` — the extra powers being the
+number of output frequencies and the `2·num_f·num_p + 1` residual
+evaluations each Jacobian needs. Against `13^N` for the multi-dimensional
+path, that is the whole difference. Halving the tone spacing at fixed tone
+count doubles `num_k`, and the time with it.
+
+`ToneGrid.report(npts)` prints `num_k` and both memory figures, so the
+choice can be made from numbers before committing to a run.
 
 `benchmarks/study_continuum.py` answers the companion question — how many
 tones before a band simply *is* a continuum. For a 20%-wide band of
