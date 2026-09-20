@@ -89,6 +89,25 @@ def test_offset_maps_frequency_to_index():
     assert grid.offset(-0.02) == -1
 
 
+def test_offset_tolerance_is_strict_on_an_exact_grid():
+    grid = ToneGrid.from_frequencies([0.30, 0.32], num_b=5)
+    assert grid.tolerance == grid.df * 1e-6
+    with pytest.raises(ValueError, match="not on the grid"):
+        grid.offset(0.30 + 1e-5)
+    assert grid.offset(0.30 + 1e-5, tol=1e-4) == grid.multipliers[0]
+
+
+def test_offset_tolerates_the_grids_own_approximation_error():
+    """A budgeted grid represents the third tone at ``120 * df``, about
+    1e-3 away from the requested 0.3417.  Asking for the current at the
+    requested frequency -- or at an IF formed from it -- must still find
+    that grid point rather than rejecting the grid's own tone."""
+    grid = ToneGrid.from_frequencies([0.30, 0.32, 0.3417], num_b=5, max_num_k=2000)
+    assert grid.frequency_error > grid.df * 1e-6
+    assert grid.offset(0.3417) == grid.multipliers[2]
+    assert grid.offset(0.3417 - 0.30) == grid.multipliers[2] - grid.multipliers[0]
+
+
 def test_offset_rejects_an_off_grid_frequency():
     grid = ToneGrid.from_frequencies([0.30, 0.32], num_b=5)
     with pytest.raises(ValueError, match="not on the grid"):
@@ -507,6 +526,84 @@ def test_harmonic_balance_grid_is_what_makes_many_tones_practical(resp_poly):
     )
     assert vj.shape == (5, 2, 21)
     assert np.all(np.isfinite(vj))
+
+
+def test_grid_resp_matrix_must_match_the_grid(resp_poly):
+    cct = _circuit(3, npts=11)
+    vj = _drive(cct, seed=3)
+    grid = ToneGrid.from_circuit(cct, num_b=5)
+    other = interpolate_respfn_grid(cct, resp_poly, ToneGrid.from_circuit(cct, num_b=6))
+    with pytest.raises(ValueError, match="Pass the grid it was built from"):
+        qtcurrent_grid(
+            vj,
+            cct,
+            resp_poly,
+            0.0,
+            num_b=5,
+            verbose=False,
+            grid=grid,
+            resp_matrix=other,
+        )
+
+
+def test_an_explicit_grid_opts_harmonic_balance_into_the_grid_engine(resp_poly):
+    """Below five tones ``method="auto"`` stays multi-dimensional, but a
+    grid handed in is an opt-in as clear as ``method="grid"``."""
+    cct = _circuit(3, npts=11)
+    for f in (1, 2, 3):
+        cct.vt[f, 1] = 0.2
+        cct.zt[f, 1] = 0.3 - 0.3j
+    grid = ToneGrid.from_circuit(cct, num_b=5)
+    kwargs = dict(num_b=5, verbose=False, stop_rerror=1e-6)
+    with_grid = qpmix.harmonic_balance(cct, resp_poly, grid=grid, **kwargs)
+    explicit = qpmix.harmonic_balance(cct, resp_poly, method="grid", **kwargs)
+    direct = qpmix.harmonic_balance(cct, resp_poly, method="direct", **kwargs)
+    assert np.abs(with_grid - explicit).max() < 1e-12
+    assert np.abs(with_grid - direct).max() > 1e-9
+
+
+def test_harmonic_balance_rejects_a_grid_with_the_direct_engine(resp_poly):
+    cct = _circuit(2, npts=11)
+    for f in (1, 2):
+        cct.vt[f, 1] = 0.1
+        cct.zt[f, 1] = 0.3
+    grid = ToneGrid.from_circuit(cct, num_b=5)
+    with pytest.raises(TypeError, match="does not use one"):
+        qpmix.harmonic_balance(
+            cct, resp_poly, num_b=5, verbose=False, method="direct", grid=grid
+        )
+    vj = qpmix.harmonic_balance(cct, resp_poly, num_b=5, verbose=False, grid=grid)
+    with pytest.raises(TypeError, match="does not use one"):
+        qpmix.check_hb_error(vj, cct, resp_poly, num_b=5, method="fft", grid=grid)
+
+
+def test_harmonic_balance_takes_an_explicit_grid_for_measured_frequencies(resp_poly):
+    """A measured gap frequency makes even a perfect comb incommensurate
+    once normalized: the rational fit asks for multipliers near 1e14 and
+    refuses.  The comb is still there in hertz, so a grid built from that
+    spacing is small -- and harmonic balance has to (a) accept it, (b) use
+    it for both the matrix and every current evaluation, and (c) hand the
+    grid unrounded frequencies, or ``offset`` rejects every tone."""
+    fgap, spacing = 677.037e9, 0.6e9
+    cct = qpmix.EmbeddingCircuit(4, 1, vb_npts=21, vb_max=2, fgap=fgap)
+    for f, f_hz in enumerate((225e9, 227.4e9, 228e9, 228.6e9), start=1):
+        cct.set_freq(f_hz, f=f, units="Hz")
+        cct.vt[f, 1] = 0.15
+        cct.zt[f, 1] = 0.3 - 0.3j
+    with pytest.raises(MemoryError, match="closely spaced"):
+        qpmix.harmonic_balance(cct, resp_poly, num_b=4, verbose=False, method="grid")
+
+    grid = ToneGrid.from_circuit(cct, num_b=4, df=spacing / fgap)
+    assert grid.multipliers == (375, 379, 380, 381)
+    assert grid.num_k == 4 * (375 + 379 + 380 + 381)
+    rm = interpolate_respfn_grid(cct, resp_poly, grid)
+    kwargs = dict(num_b=4, verbose=False, stop_rerror=1e-5, grid=grid)
+    vj = qpmix.harmonic_balance(cct, resp_poly, **kwargs)
+    assert vj.shape == (5, 2, 21)
+    assert np.all(np.isfinite(vj))
+    qpmix.check_hb_error(vj, cct, resp_poly, num_b=4, stop_rerror=1e-3, grid=grid)
+    reused = qpmix.harmonic_balance(cct, resp_poly, resp_matrix=rm, **kwargs)
+    assert np.abs(reused - vj).max() < 1e-12
 
 
 def test_harmonic_balance_rejects_too_many_tones_for_the_direct_engine(resp_poly):

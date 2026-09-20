@@ -253,6 +253,14 @@ def test_hb_freq_list_covers_every_signal(make_circuit):
     assert _hb_freq_list(cct) == [0.3, 0.6, 0.32, 0.64]
 
 
+def test_hb_freq_list_is_not_rounded(make_circuit):
+    """The grid engine needs the exact products: ``ToneGrid.offset`` has to
+    recognise ``p * freq[f]`` as a grid point, and a four-decimal rounding
+    is off by up to 5e-5 -- far outside the tolerance of a fine grid."""
+    cct = make_circuit(num_f=1, num_p=2, freqs=(225e9 / 677.037e9,))
+    assert _hb_freq_list(cct) == [cct.freq[1], 2 * cct.freq[1]]
+
+
 def test_broyden_update_satisfies_the_secant_condition():
     """After the update, J^-1 df must equal dx."""
     rng = np.random.default_rng(1)

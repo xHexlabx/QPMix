@@ -56,7 +56,11 @@ signal 5 MHz apart at 230 GHz need ``n = (46000, 46001)``, giving
 * **many tones on a coarse grid** (a comb, a band split into channels, a
   continuum approximation) -- use this module;
 * **a few closely spaced tones** (LO + RF + IF) -- use
-  :func:`qpmix.qtcurrent.qtcurrent` directly.
+  :func:`qpmix.qtcurrent.qtcurrent` directly;
+* **a comb whose spacing is not a simple fraction of the gap frequency**
+  (any *measured* ``fgap``) -- the rational fit cannot see the comb once
+  the tones are normalized, so give :meth:`ToneGrid.from_circuit` the
+  spacing directly: ``df=spacing_hz / cct.fgap``.
 
 :meth:`ToneGrid.report` prints both costs so the choice can be made from
 numbers rather than intuition.
@@ -191,11 +195,30 @@ class ToneGrid:
         """Number of complex values in the gridded response matrix."""
         return 2 * self.num_k + 1
 
-    def offset(self, frequency: float) -> int:
+    @property
+    def tolerance(self) -> float:
+        """How far off a grid point :meth:`offset` lets a frequency sit.
+
+        An exact grid accepts only rounding noise.  An approximate one --
+        from ``max_num_k`` or a capped ``max_denominator`` -- represents
+        tone ``f`` at ``multipliers[f] * df`` rather than at
+        ``requested[f]``, so a frequency formed from the requested tones (a
+        harmonic, an IF, an intermodulation product) is off the grid by
+        that approximation error times its order.  Allow for the highest
+        order the multi-dimensional engine enumerates, ``num_f * num_p``.
+        """
+        return max(self.df * 1e-6, self.num_f * self.num_p * self.frequency_error)
+
+    def offset(self, frequency: float, tol: float | None = None) -> int:
         """Index offset corresponding to an output frequency.
 
         Args:
-            frequency (float): Output frequency, normalized.
+            frequency (float): Output frequency, normalized.  Pass it
+                unrounded: on a fine grid, a value rounded to a few
+                decimals is no longer on the grid.
+            tol (float, optional): How far from a grid point the frequency
+                may sit and still be accepted.  Default is None, meaning
+                :attr:`tolerance`.
 
         Returns:
             int: The offset ``a`` such that ``a * df`` is that frequency.
@@ -205,9 +228,12 @@ class ToneGrid:
 
         """
         a = round(frequency / self.df)
-        if abs(a * self.df - frequency) > self.df * 1e-6:
+        if tol is None:
+            tol = self.tolerance
+        if abs(a * self.df - frequency) > tol:
             raise ValueError(
-                f"Frequency {frequency} is not on the grid (df = {self.df})."
+                f"Frequency {frequency} is not on the grid (df = {self.df}, "
+                f"nearest point {a * self.df}, tolerance {tol:.3g})."
             )
         return int(a)
 
@@ -673,7 +699,8 @@ def qtcurrent_grid(
         :func:`qpmix.qtcurrent.qtcurrent` returns it.
 
     Raises:
-        ValueError: If an output frequency is not on the grid.
+        ValueError: If an output frequency is not on the grid, or if
+            ``resp_matrix`` was built for a different grid.
 
     """
     npts = cct.vb_npts
@@ -692,6 +719,11 @@ def qtcurrent_grid(
     ck = phase_factor_grid(vj, cct, grid, num_theta=num_theta)
     if resp_matrix is None:
         resp_matrix = interpolate_respfn_grid(cct, resp, grid)
+    elif resp_matrix.shape != (grid.entries, npts):
+        raise ValueError(
+            f"resp_matrix has shape {resp_matrix.shape}, but this grid needs "
+            f"{(grid.entries, npts)}. Pass the grid it was built from."
+        )
 
     # Every output frequency is a single offset on the grid, so this is the
     # one-dimensional correlation that _kernels.coeff_1 already implements.

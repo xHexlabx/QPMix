@@ -400,6 +400,10 @@ common grid is very fine) instead of a commensurate comb:
 The grid engine is 10–75× *slower* there.  So the choice is not "how many
 tones" but "are the tones commensurate on a coarse grid": a harmonic comb or
 an evenly channelised band, yes; an LO and an RF signal a few MHz apart, no.
+Commensurate *in hertz* is what counts: over a measured gap frequency the
+normalized values of a perfect comb are not simple fractions, so the
+rational fit cannot find the comb by itself.  Pass its spacing as `df` to
+`ToneGrid.from_circuit` and the same grid to `harmonic_balance(grid=...)`.
 
 ### Why the grid is opt-in below five tones
 

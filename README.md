@@ -213,6 +213,21 @@ An LO and an RF signal 5 MHz apart at 230 GHz need multipliers
 `(46000, 46001)` and `num_k = 1.4 × 10⁶`: many tones are unlocked, fine
 frequency resolution is not.
 
+One case looks like "arbitrary measured frequencies" but is not: a comb in
+hertz over a *measured* gap frequency. An LO at 225 GHz and RF tones on a
+0.6 GHz spacing are commensurate, but divided by `fgap = 677.037 GHz` they
+are no longer simple fractions, the rational fit asks for multipliers near
+10¹⁴, and `ToneGrid.from_circuit` refuses. Give the grid its spacing
+directly and hand the same grid to harmonic balance; the multipliers become
+`(375, 379, 380, 381)`, `num_k = 6060`, and the matrix 78 MB at 401 bias
+points where the automatic fit wanted 10⁹ GB:
+
+```python
+grid = ToneGrid.from_circuit(cct, num_b=4, df=0.6e9 / cct.fgap)
+vj = qpmix.harmonic_balance(cct, resp, num_b=4, grid=grid)     # grid implies method="grid"
+i = qpmix.qtcurrent(vj, cct, resp, freqs, num_b=4, method="grid", grid=grid)
+```
+
 Measured end to end (harmonic balance + `qtcurrent`, tones 0.02 apart,
 `num_b = 6`, 226 bias points):
 

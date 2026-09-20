@@ -84,6 +84,26 @@ numbering follow QMix; the numerical methods, packaging and tests are new.
   bound on the same exponentially growing array. The grid engine's cost is
   polynomial in the tone count instead (`num_k ~ F^1.35`, end-to-end time
   `~F^3.0`), so its advantage grows without limit.
+  - `harmonic_balance` and `check_hb_error` also take `grid=`, which selects
+    the grid engine and is used for both the response matrix and every
+    current evaluation, so the two cannot disagree. This is what makes a
+    comb over a *measured* gap frequency tractable: normalized to
+    `fgap = 677.037 GHz`, an LO at 225 GHz with RF tones 0.6 GHz apart is no
+    longer a set of simple fractions, the automatic fit asks for 8e16
+    response-function entries and refuses, while
+    `ToneGrid.from_circuit(cct, df=0.6e9 / fgap)` gives multipliers
+    `(375, 379, 380, 381)`, `num_k = 6060`, and 78 MB at 401 bias points.
+  - The frequencies harmonic balance requests are no longer rounded to four
+    decimals. The multi-dimensional engine rounds them itself, but the grid
+    engine needs them exact: on a grid with `df = 8.9e-4`, the rounded LO
+    was 3e-5 off its own grid point and `ToneGrid.offset` rejected every
+    tone.
+  - `ToneGrid.offset` takes a `tol`, defaulting to `ToneGrid.tolerance`,
+    which allows for the grid's own approximation error. A budgeted grid
+    from `max_num_k` represents each tone slightly off its requested
+    frequency, and used to reject that requested frequency as "not on the
+    grid".
+  - `qtcurrent_grid` checks that a supplied `resp_matrix` matches the grid.
 - `EmbeddingCircuit` no longer caps `num_f` at four.
 - `benchmarks/bench_multitone.py` measures the scaling;
   `benchmarks/study_continuum.py` answers how many tones make a band a

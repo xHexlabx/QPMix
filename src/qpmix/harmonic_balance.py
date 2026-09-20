@@ -52,15 +52,14 @@ Examples:
 from __future__ import annotations
 
 from timeit import default_timer as timer
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from qpmix.qtcurrent import (
-    MAX_DIRECT_TONES,
-    ROUND_FREQ,
-    interpolate_respfn,
-    qtcurrent,
-)
+from qpmix.qtcurrent import MAX_DIRECT_TONES, interpolate_respfn, qtcurrent
+
+if TYPE_CHECKING:
+    from qpmix.multitone import ToneGrid
 
 __all__ = ["check_hb_error", "harmonic_balance"]
 
@@ -87,6 +86,7 @@ def harmonic_balance(
     line_search: bool = True,
     resp_matrix: np.ndarray | None = None,
     method: str = "auto",
+    grid: ToneGrid | None = None,
 ):
     """Solve for the junction voltage that balances the circuit.
 
@@ -136,7 +136,14 @@ def harmonic_balance(
             the bias sweep, the tone frequencies and ``num_b`` -- none of
             which change while fitting an embedding circuit -- so passing it
             in avoids rebuilding the single most expensive array on every
-            call.  Default is None.
+            call.  A matrix built for the grid engine must come with the
+            ``grid`` it was built on.  Default is None.
+        grid (qpmix.multitone.ToneGrid, optional): Use this grid instead of
+            fitting one to the circuit.  Passing it selects the grid engine,
+            like ``method="grid"``.  Build it with an explicit ``df`` when
+            the tones form a comb in hertz that the rational fit cannot see
+            once they are normalized to a measured gap frequency.  Default
+            is None.
 
     Returns:
         ndarray: The junction voltage, shape
@@ -145,12 +152,15 @@ def harmonic_balance(
 
     Raises:
         ValueError: If ``jacobian`` or ``mode`` is not recognised.
+        TypeError: If ``grid`` is given with a ``method`` that does not use
+            one.
 
     """
     if jacobian not in ("broyden", "newton"):
         raise ValueError(f"Unknown jacobian option: {jacobian!r}")
     if mode not in ("o", "x", "m"):
         raise ValueError(f"Unknown mode: {mode!r}")
+    _check_grid_method(grid, method)
 
     if verbose:
         print("Running harmonic balance:")
@@ -194,12 +204,18 @@ def harmonic_balance(
 
     # The response matrix and the current evaluations must use the same
     # engine, and for the grid engine the same grid, or their array shapes
-    # will not match.  Resolve it once here.
-    grid = None
-    if method == "grid" or (method == "auto" and num_f > MAX_DIRECT_TONES):
-        from qpmix.multitone import ToneGrid
+    # will not match.  Resolve it once here; an explicit grid opts in to
+    # the grid engine.
+    if (
+        grid is not None
+        or method == "grid"
+        or (method == "auto" and num_f > MAX_DIRECT_TONES)
+    ):
+        if grid is None:
+            from qpmix.multitone import ToneGrid
 
-        grid = ToneGrid.from_circuit(cct, num_b=num_b)
+            grid = ToneGrid.from_circuit(cct, num_b=num_b)
+        method = "grid"
     respfn_interp = (
         interpolate_respfn(cct, resp, num_b, method=method, grid=grid)
         if resp_matrix is None
@@ -281,8 +297,31 @@ def _package(vj_out, iteration, converged, finished_points, mode):
     return vj_out, finished_points
 
 
+def _check_grid_method(grid, method: str) -> None:
+    """Reject a grid paired with an engine that cannot use it.
+
+    Args:
+        grid (qpmix.multitone.ToneGrid or None): The grid, if any.
+        method (str): The requested engine.
+
+    Raises:
+        TypeError: If ``grid`` is given and ``method`` is neither
+            ``"auto"`` nor ``"grid"``.
+
+    """
+    if grid is not None and method not in ("auto", "grid"):
+        raise TypeError(f"A grid was given, but method={method!r} does not use one.")
+
+
 def _hb_freq_list(cct) -> list[float]:
     """The frequencies harmonic balance needs from ``qtcurrent``.
+
+    The values are deliberately not rounded.  The multi-dimensional engine
+    rounds its output frequencies to ``ROUND_FREQ`` decimals itself; the
+    grid engine needs them exact, because ``ToneGrid.offset`` has to
+    recognise ``p * freq[f]`` as the grid point ``p * multipliers[f]``, and
+    a four-decimal rounding moves it by up to ``5e-5`` -- far outside the
+    tolerance of the fine grid a measured frequency produces.
 
     Args:
         cct (qpmix.circuit.EmbeddingCircuit): The embedding circuit.
@@ -292,7 +331,7 @@ def _hb_freq_list(cct) -> list[float]:
 
     """
     return [
-        round(cct.freq[f] * p, ROUND_FREQ)
+        float(cct.freq[f] * p)
         for f in range(1, cct.num_f + 1)
         for p in range(1, cct.num_p + 1)
     ]
@@ -532,7 +571,15 @@ def _k_to_fp(k: int, num_p: int) -> tuple[int, int]:
     return k // num_p + 1, k % num_p + 1
 
 
-def check_hb_error(vj_check, cct, resp, num_b=15, stop_rerror=0.001) -> None:
+def check_hb_error(
+    vj_check,
+    cct,
+    resp,
+    num_b=15,
+    stop_rerror=0.001,
+    method: str = "auto",
+    grid: ToneGrid | None = None,
+) -> None:
     """Independently verify a harmonic balance solution.
 
     Recomputes the residual from scratch and asserts that it meets the
@@ -545,15 +592,28 @@ def check_hb_error(vj_check, cct, resp, num_b=15, stop_rerror=0.001) -> None:
         num_b (int or tuple, optional): Summation limit.  Default is 15.
         stop_rerror (float, optional): Target relative error.  Default is
             0.001.
+        method (str, optional): Engine for the current evaluation, as in
+            :func:`harmonic_balance`.  Default is ``"auto"``.
+        grid (qpmix.multitone.ToneGrid, optional): The grid the solution
+            was computed on, if the grid engine needs one it cannot fit by
+            itself.  Default is None.
 
     Raises:
         AssertionError: If any signal fails to meet the error target.
+        TypeError: If ``grid`` is given with a ``method`` that does not use
+            one.
 
     """
+    _check_grid_method(grid, method)
     print("Double-checking harmonic balance error:")
 
+    current_kwargs = {"method": method}
+    if grid is not None:
+        current_kwargs = {"method": "grid", "grid": grid}
     freq_list = _hb_freq_list(cct)
-    current = qtcurrent(vj_check, cct, resp, freq_list, num_b, verbose=False)
+    current = qtcurrent(
+        vj_check, cct, resp, freq_list, num_b, verbose=False, **current_kwargs
+    )
     ij_all = np.zeros((cct.num_f + 1, cct.num_p + 1, cct.vb_npts), dtype=complex)
     ij_all[1:, 1:] = current.reshape((cct.num_f, cct.num_p, cct.vb_npts))
 
