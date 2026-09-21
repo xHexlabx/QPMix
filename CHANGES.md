@@ -124,6 +124,38 @@ error in the DC current.
 QPMix now counts each `±` pair once and drops the quadrature term at DC,
 where the current is real by construction. Both engines then agree with the
 sum rule to 6e-13 and with each other to 1e-10.
+- **Drive-level check.** `num_b` truncates each tone's Bessel series, and
+  nothing said when it was too small. A mixer's IF tone has a tiny photon
+  voltage, so a modest induced IF voltage is already a drive level of 10 or
+  more, and `num_b = 4` there silently threw away most of the phase-factor
+  weight: a 23% error in conversion gain on a measured device.
+  `qpmix.phase_factor.required_num_b` computes the limit each tone needs
+  from a solved `vj` (the dropped weight is exactly `1 - sum J_n^2`), and
+  `qtcurrent`, `qtcurrent_grid` and `harmonic_balance` issue a
+  `DriveLevelWarning` when the limit in use drops more than 1e-6 of it. On
+  the grid the test is `num_k` against the summed spectral spread.
+- **Convergence is never silent.** `harmonic_balance` with `verbose=False`
+  returned a half-converged solution with no trace. It now issues a
+  `ConvergenceWarning` whenever the error target is missed, unless the
+  caller asked for the flag with `mode="x"` or `"m"` -- which is what a
+  fitting loop should do, and what `qpmix.exp.currentmatch` does; it checks
+  the drive level of its final answer only, not of every source the
+  optimiser tried.
+- **`RespFnFromIVData` uses the whole measured curve.** It used to keep the
+  data only up to 1.8 gap voltages and continue ohmically with the offset
+  `i - v` found there, QMix's rule. The Kramers-Kronig transform weights the
+  tail logarithmically, and on a real junction that offset keeps drifting
+  well above two gap voltages (-0.078 at 1.8, -0.104 at 3.4 on a measured
+  device), so the cut moved `ikk` across the entire sub-gap region by
+  0.04 `I_gap`. The shift is nearly uniform, and a uniform offset in `ikk`
+  cancels in the tunnelling currents (its Bessel weights sum to zero), so
+  mixer gain barely notices; anything that reads `ikk` itself, such as the
+  junction's reactive admittance, sees the full 4%. The default
+  `vlimit` is now None (use every point) and the offset is fitted over the
+  top tenth of the range rather than read from the last sample; pass
+  `vlimit=1.8` to reproduce QMix.
+- An explicit `grid=` selects the grid engine in `qtcurrent` and
+  `interpolate_respfn` too, as it already did in `harmonic_balance`.
 
 ### Architecture
 

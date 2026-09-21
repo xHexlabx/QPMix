@@ -337,11 +337,16 @@ class _Objective:
                 "No measured bias points fall inside the requested windows."
             )
 
-    def simulate(self, params):
+    def simulate(self, params, check=False):
         """Simulated pumped DC I-V curve for one candidate source.
 
         Args:
             params (sequence): ``[vt, re1, im1, ...]``.
+            check (bool, optional): Issue a
+                :class:`qpmix.phase_factor.DriveLevelWarning` if ``num_b``
+                is too small for this source's drive level.  Off during the
+                search, which visits sources no one would keep; on for the
+                final answer.  Default is False.
 
         Returns:
             ndarray: The simulated DC current on the fit grid.
@@ -361,6 +366,7 @@ class _Objective:
             verbose=False,
             mode="x",
             resp_matrix=self.resp_matrix,
+            check_drive_level=check,
             **self.hb_kwargs,
         )
         if not converged:
@@ -373,6 +379,7 @@ class _Objective:
             num_b=self.num_b,
             verbose=False,
             resp_matrix=self.resp_matrix,
+            check_drive_level=False,
         )
 
     def __call__(self, params):
@@ -745,7 +752,7 @@ def _select(candidates, harmonics, cluster_tol, windows, objective):
         candidates=tuple(candidates),
         voltage=objective.voltage,
         current=objective.current,
-        simulated=objective.simulate(best[1]),
+        simulated=objective.simulate(best[1], check=True),
         n_calls=objective.calls,
         n_not_converged=objective.not_converged,
     )

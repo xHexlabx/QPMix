@@ -339,3 +339,42 @@ def test_select_method_falls_back_when_memory_would_blow_up():
 def test_select_method_rejects_unknown_names():
     with pytest.raises(ValueError, match="Unknown method"):
         _select_method("magic", 1, 1, (5,), 11, [[(0,)]])
+
+
+def test_an_explicit_grid_selects_the_grid_engine(resp_poly, make_circuit, random_vj):
+    """harmonic_balance treats grid= as an opt-in; qtcurrent and
+    interpolate_respfn have to agree, or the same grid is accepted by one
+    call and rejected by the next."""
+    from qpmix.multitone import ToneGrid
+    from qpmix.qtcurrent import interpolate_respfn, qtcurrent
+
+    cct = make_circuit(num_f=2, npts=11)
+    vj = random_vj(2, 1, 11)
+    grid = ToneGrid.from_circuit(cct, num_b=5)
+    auto = qtcurrent(vj, cct, resp_poly, 0.0, num_b=5, verbose=False, grid=grid)
+    explicit = qtcurrent(
+        vj, cct, resp_poly, 0.0, num_b=5, verbose=False, method="grid", grid=grid
+    )
+    assert np.array_equal(auto, explicit)
+    assert interpolate_respfn(cct, resp_poly, 5, grid=grid).shape == (grid.entries, 11)
+
+
+def test_undersized_num_b_warns(resp_poly, make_circuit):
+    """A tone driven to alpha = 3 with num_b = 2 drops most of its
+    phase-factor weight.  That used to be silent."""
+    import warnings
+
+    from qpmix.phase_factor import DriveLevelWarning
+    from qpmix.qtcurrent import qtcurrent
+
+    cct = make_circuit(num_f=1, npts=5)
+    vj = np.zeros((2, 2, 5), dtype=complex)
+    vj[1, 1] = 0.9  # alpha = 0.9 / 0.30 = 3
+    with pytest.warns(DriveLevelWarning, match="tone 1"):
+        qtcurrent(vj, cct, resp_poly, 0.0, num_b=2, verbose=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DriveLevelWarning)
+        qtcurrent(
+            vj, cct, resp_poly, 0.0, num_b=2, verbose=False, check_drive_level=False
+        )
+        qtcurrent(vj, cct, resp_poly, 0.0, num_b=15, verbose=False)

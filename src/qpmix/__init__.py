@@ -32,10 +32,14 @@ Quick start:
 
 from qpmix._backend import get_config, set_num_threads
 from qpmix.circuit import EmbeddingCircuit, read_circuit
-from qpmix.harmonic_balance import check_hb_error, harmonic_balance
+from qpmix.harmonic_balance import ConvergenceWarning, check_hb_error, harmonic_balance
 from qpmix.interp import UniformInterpolator
 from qpmix.multitone import ToneGrid, qtcurrent_grid
-from qpmix.phase_factor import calculate_phase_factor_coeff
+from qpmix.phase_factor import (
+    DriveLevelWarning,
+    calculate_phase_factor_coeff,
+    required_num_b,
+)
 from qpmix.qtcurrent import interpolate_respfn, qtcurrent
 from qpmix.respfn import (
     RespFn,
@@ -48,6 +52,8 @@ from qpmix.respfn import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "ConvergenceWarning",
+    "DriveLevelWarning",
     "EmbeddingCircuit",
     "RespFn",
     "RespFnExponential",
@@ -65,5 +71,6 @@ __all__ = [
     "qtcurrent",
     "qtcurrent_grid",
     "read_circuit",
+    "required_num_b",
     "set_num_threads",
 ]

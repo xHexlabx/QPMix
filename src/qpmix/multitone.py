@@ -83,6 +83,7 @@ Examples:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from fractions import Fraction
 from math import gcd, lcm
@@ -94,7 +95,13 @@ from scipy.fft import fft, next_fast_len
 from qpmix import _kernels
 from qpmix._backend import JIT_ENABLED, njit, prange
 from qpmix._respmat import build_resp_matrix
-from qpmix.phase_factor import _as_nb_tuple, drive_level
+from qpmix.phase_factor import (
+    DRIVE_LEVEL_TOL,
+    DriveLevelWarning,
+    _as_nb_tuple,
+    drive_level,
+    required_num_b,
+)
 
 __all__ = [
     "ToneGrid",
@@ -659,6 +666,33 @@ def _correlate(ck, resp_matrix, num_k, offsets, npts):
     return rs
 
 
+def _check_grid_truncation(vj, cct, grid: ToneGrid) -> None:
+    """Warn when ``num_k`` is too small for the drive levels in ``vj``.
+
+    The grid truncates the *total* offset, so the requirement is the sum
+    over tones of multiplier times Bessel orders -- the worst case, in which
+    every tone's spread adds.
+
+    Args:
+        vj (ndarray): Junction voltage.
+        cct (qpmix.circuit.EmbeddingCircuit): The embedding circuit.
+        grid (ToneGrid): The grid in use.
+
+    """
+    need = required_num_b(vj, cct.freq, cct.num_f, cct.num_p, tol=DRIVE_LEVEL_TOL)
+    needed_k = sum(n * b for n, b in zip(grid.multipliers, need, strict=True))
+    if needed_k > grid.num_k:
+        warnings.warn(
+            f"The grid truncation num_k={grid.num_k:,} does not cover the "
+            f"realised drive levels, which need about {needed_k:,} (Bessel "
+            f"orders per tone {need}): more than {DRIVE_LEVEL_TOL:g} of the "
+            "phase-factor weight is dropped. Raise num_b for the tones that "
+            "dominate.",
+            DriveLevelWarning,
+            stacklevel=3,
+        )
+
+
 def qtcurrent_grid(
     vj: np.ndarray,
     cct,
@@ -669,6 +703,7 @@ def qtcurrent_grid(
     grid: ToneGrid | None = None,
     resp_matrix: np.ndarray | None = None,
     num_theta: int | None = None,
+    check_drive_level: bool = True,
 ) -> np.ndarray:
     """Quasiparticle tunneling current, for any number of tones.
 
@@ -693,6 +728,10 @@ def qtcurrent_grid(
             :func:`interpolate_respfn_grid`.  Default is None.
         num_theta (int, optional): Override the FFT length.  Default is
             None.
+        check_drive_level (bool, optional): Issue a
+            :class:`qpmix.phase_factor.DriveLevelWarning` when the grid
+            truncation ``num_k`` does not cover the spectral spread the
+            drive levels in ``vj`` imply.  Default is True.
 
     Returns:
         ndarray: The tunneling current, shaped as
@@ -716,6 +755,8 @@ def qtcurrent_grid(
         print(f" - grid df = {grid.df:.6g}, num_k = {grid.num_k:,}")
         start_time = timer()
 
+    if check_drive_level:
+        _check_grid_truncation(vj, cct, grid)
     ck = phase_factor_grid(vj, cct, grid, num_theta=num_theta)
     if resp_matrix is None:
         resp_matrix = interpolate_respfn_grid(cct, resp, grid)

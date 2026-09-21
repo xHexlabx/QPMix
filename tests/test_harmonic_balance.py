@@ -191,12 +191,14 @@ def test_failure_to_converge_is_reported(resp_poly, make_circuit, capsys):
     assert "DID NOT ACHIEVE" not in capsys.readouterr().out
 
 
+@pytest.mark.filterwarnings("ignore::qpmix.harmonic_balance.ConvergenceWarning")
 def test_failure_to_converge_is_printed_when_verbose(resp_poly, make_circuit, capsys):
     cct = _driven(make_circuit(npts=21))
     harmonic_balance(cct, resp_poly, num_b=9, verbose=True, max_it=0, stop_rerror=1e-12)
     assert "DID NOT ACHIEVE" in capsys.readouterr().out
 
 
+@pytest.mark.filterwarnings("ignore::qpmix.harmonic_balance.ConvergenceWarning")
 def test_verbose_prints_progress(resp_poly, make_circuit, capsys):
     cct = _driven(make_circuit(npts=21))
     harmonic_balance(cct, resp_poly, num_b=9, verbose=True, max_it=3)
@@ -287,3 +289,26 @@ def test_broyden_update_is_a_no_op_for_a_null_step():
 def test_top_level_exports_are_wired_up():
     assert qpmix.harmonic_balance is harmonic_balance
     assert qpmix.check_hb_error is check_hb_error
+
+
+def test_non_convergence_issues_a_warning_even_when_quiet(resp_poly, make_circuit):
+    """Silence was the failure mode: verbose=False in a fitting loop returned
+    a half-converged vj with no trace unless the caller asked for mode="x".
+    Now it warns regardless, and a converged run stays quiet."""
+    import warnings
+
+    from qpmix.harmonic_balance import ConvergenceWarning
+
+    cct = _driven(make_circuit(npts=11))
+    with pytest.warns(ConvergenceWarning, match="did not converge"):
+        harmonic_balance(
+            cct, resp_poly, num_b=9, verbose=False, max_it=0, stop_rerror=1e-12
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ConvergenceWarning)
+        harmonic_balance(cct, resp_poly, num_b=9, verbose=False)
+        # Asking for the flag is the programmatic route, so no warning then.
+        _, _, converged = harmonic_balance(
+            cct, resp_poly, num_b=9, verbose=False, mode="x", max_it=0
+        )
+        assert converged is False

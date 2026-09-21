@@ -163,3 +163,32 @@ def test_num_b_normalization(num_b, num_f, expected):
 def test_num_b_tuple_must_cover_every_tone():
     with pytest.raises(ValueError, match="one value of num_b"):
         _as_nb_tuple((5,), 3)
+
+
+def test_bessel_orders_tracks_the_dropped_weight():
+    """sum_n J_n(a)^2 = 1, so the limit returned must be the first one whose
+    tail is inside the tolerance, and the one below it must not be."""
+    from scipy.special import jv
+
+    from qpmix.phase_factor import bessel_orders
+
+    assert bessel_orders(0.0) == 0
+    for alpha, tol in ((1.12, 1e-6), (1.12, 1e-9), (11.0, 1e-9), (40.0, 1e-9)):
+        b = bessel_orders(alpha, tol)
+
+        def tail(k, alpha=alpha):
+            return 1.0 - np.sum(jv(np.arange(-k, k + 1), alpha) ** 2)
+
+        assert tail(b) <= tol
+        assert tail(b - 1) > tol
+
+
+def test_required_num_b_scales_with_the_harmonic_and_takes_the_worst_bias():
+    from qpmix.phase_factor import bessel_orders, required_num_b
+
+    freq = np.array([0.0, 0.3, 0.4])
+    vj = np.zeros((3, 3, 4), dtype=complex)
+    vj[1, 1, :] = 0.3 * np.array([0.1, 1.0, 2.0, 0.5])  # alpha up to 2, harmonic 1
+    vj[2, 2, :] = 1.2  # alpha 1.2 / (2 * 0.4) = 1.5 on harmonic 2 of tone 2
+    need = required_num_b(vj, freq, 2, 2, tol=1e-9)
+    assert need == (bessel_orders(2.0, 1e-9), 2 * bessel_orders(1.5, 1e-9))

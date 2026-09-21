@@ -51,17 +51,29 @@ Examples:
 
 from __future__ import annotations
 
+import warnings
 from timeit import default_timer as timer
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from qpmix.qtcurrent import MAX_DIRECT_TONES, interpolate_respfn, qtcurrent
+from qpmix.phase_factor import _as_nb_tuple
+from qpmix.qtcurrent import (
+    MAX_DIRECT_TONES,
+    _check_drive_level,
+    interpolate_respfn,
+    qtcurrent,
+)
 
 if TYPE_CHECKING:
     from qpmix.multitone import ToneGrid
 
-__all__ = ["check_hb_error", "harmonic_balance"]
+__all__ = ["ConvergenceWarning", "check_hb_error", "harmonic_balance"]
+
+
+class ConvergenceWarning(UserWarning):
+    """Harmonic balance stopped before reaching the error target."""
+
 
 #: Thevenin voltages below this are clamped, to avoid dividing by zero when
 #: forming relative errors.
@@ -87,6 +99,7 @@ def harmonic_balance(
     resp_matrix: np.ndarray | None = None,
     method: str = "auto",
     grid: ToneGrid | None = None,
+    check_drive_level: bool = True,
 ):
     """Solve for the junction voltage that balances the circuit.
 
@@ -111,11 +124,12 @@ def harmonic_balance(
         mode (str, optional): ``"o"`` returns ``vj``; ``"x"`` also returns
             the iteration count and a converged flag; ``"m"`` also returns
             a per-bias-point convergence mask.  Default is ``"o"``.
-        verbose (bool, optional): Print progress to the terminal, including
-            a warning if the error target is not met.  Default is True.
-            Use ``mode="x"`` to detect non-convergence programmatically --
-            a fitting loop that calls this thousands of times cannot afford
-            the message, and QMix prints it unconditionally.
+        verbose (bool, optional): Print progress to the terminal.  Default
+            is True.  Whether or not it prints, a run that misses the error
+            target issues a :class:`ConvergenceWarning` -- unless the caller
+            asked for the convergence flag with ``mode="x"`` or ``"m"``,
+            which is the programmatic way to handle it and what a fitting
+            loop should use.
         zj_guess (float, optional): Assumed junction impedance for the
             initial guess.  Default is 0.67.
         jacobian (str, optional): ``"broyden"`` recomputes the Jacobian
@@ -144,6 +158,11 @@ def harmonic_balance(
             the tones form a comb in hertz that the rational fit cannot see
             once they are normalized to a measured gap frequency.  Default
             is None.
+        check_drive_level (bool, optional): Once the solution is known,
+            issue a :class:`qpmix.phase_factor.DriveLevelWarning` if
+            ``num_b`` is too small for the drive level it implies.  An
+            optimiser that explores absurd sources should pass False and
+            check only its final answer.  Default is True.
 
     Returns:
         ndarray: The junction voltage, shape
@@ -222,7 +241,11 @@ def harmonic_balance(
         else resp_matrix
     )
     freq_list = _hb_freq_list(cct)
-    current_kwargs = {} if grid is None else {"grid": grid}
+    # Intermediate Newton iterates can overshoot to drive levels the final
+    # answer never reaches, so the drive-level check is done once, below.
+    current_kwargs: dict = {"check_drive_level": False}
+    if grid is not None:
+        current_kwargs["grid"] = grid
     if method != "auto":
         current_kwargs["method"] = method
 
@@ -252,6 +275,8 @@ def harmonic_balance(
         if iteration == max_it:
             if verbose:
                 print("*** DID NOT ACHIEVE TARGET ERROR VALUE ***\n")
+            if mode == "o":
+                _warn_not_converged(max_it, max_rel_error, stop_rerror, finished_points)
             break
 
         if inv_j is None or jacobian == "newton":
@@ -265,6 +290,8 @@ def harmonic_balance(
 
     vj_out = np.zeros((num_f + 1, num_p + 1, npts), dtype=complex)
     vj_out[1:, 1:, :] = vj_2d.reshape((num_f, num_p, npts))
+    if check_drive_level:
+        _drive_level_check(vj_out, cct, num_b, grid)
 
     if verbose:
         elapsed = timer() - start_time
@@ -295,6 +322,46 @@ def _package(vj_out, iteration, converged, finished_points, mode):
     if mode == "x":
         return vj_out, iteration, converged
     return vj_out, finished_points
+
+
+def _warn_not_converged(max_it, max_rel_error, stop_rerror, finished_points) -> None:
+    """Issue the :class:`ConvergenceWarning` for a run that missed its target.
+
+    Args:
+        max_it (int): Iteration budget that was exhausted.
+        max_rel_error (float): Worst relative error at the end.
+        stop_rerror (float): The target.
+        finished_points (ndarray): Per-bias-point convergence mask.
+
+    """
+    warnings.warn(
+        f"Harmonic balance stopped after {max_it} iteration(s) with a worst "
+        f"relative error of {max_rel_error:.2e}, above stop_rerror={stop_rerror:g}; "
+        f"{int(np.count_nonzero(~finished_points))} of {finished_points.size} bias "
+        "points did not converge. Use mode='x' or 'm' to handle this in code.",
+        ConvergenceWarning,
+        stacklevel=3,
+    )
+
+
+def _drive_level_check(vj, cct, num_b, grid) -> None:
+    """Warn if ``num_b`` turned out too small for the solved drive level.
+
+    Args:
+        vj (ndarray): The solved junction voltage.
+        cct (qpmix.circuit.EmbeddingCircuit): The embedding circuit.
+        num_b (int or tuple): Summation limit.
+        grid (qpmix.multitone.ToneGrid or None): The grid, if the grid
+            engine was used.
+
+    """
+    if grid is None:
+        nb_list = _as_nb_tuple(num_b, cct.num_f)
+        _check_drive_level(vj, cct.freq, cct.num_f, cct.num_p, nb_list)
+    else:
+        from qpmix.multitone import _check_grid_truncation
+
+        _check_grid_truncation(vj, cct, grid)
 
 
 def _check_grid_method(grid, method: str) -> None:

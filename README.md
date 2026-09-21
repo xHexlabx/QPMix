@@ -335,6 +335,18 @@ f_if = round(float(cct.freq[2] - cct.freq[1]), 4)
 i_if = qpmix.qtcurrent(vj, cct, resp, f_if, num_b=15)
 ```
 
+`num_b` truncates each tone's Bessel series and has to cover that tone's
+drive level `alpha = |vj| / (p * vph)`, which you only know after solving.
+The trap is a tone with a small photon voltage: an IF tone at 3 GHz has
+`vph ~ 0.004`, so a modest induced IF voltage is already `alpha ~ 10`, and
+`num_b = 4` there silently drops most of the phase-factor weight (a 23% error
+in conversion gain on a measured device). `harmonic_balance` and `qtcurrent`
+now warn (`DriveLevelWarning`) when that happens, and
+`qpmix.required_num_b(vj, cct.freq, cct.num_f, cct.num_p)` returns the limit
+each tone needs from a solved `vj`, so the fix is one line rather than a
+guess. Likewise a run that misses its error target issues a
+`ConvergenceWarning` unless you asked for the flag with `mode="x"`.
+
 ---
 
 ## Analyzing measured data

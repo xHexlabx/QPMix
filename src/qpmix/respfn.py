@@ -88,8 +88,13 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "kk_n": KK_N_DEFAULT,
     "dv": DV_DEFAULT,
     "vrange": VRANGE,
-    "vlimit": 1.8,
+    "vlimit": None,
 }
+
+#: A measured curve handed to :class:`RespFnFromIVData` must reach at least
+#: this normalized voltage, so that the ohmic continuation starts on the
+#: normal-state branch rather than in the transition.
+VLIMIT_MIN = 1.8
 
 
 def _default_params(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -415,23 +420,36 @@ class RespFnFromIVData(RespFn):
     """Response function built from measured DC I-V data.
 
     Unlike :class:`RespFn`, the input need not be uniformly spaced, start at
-    zero, or extend far past the gap: it is cleaned, truncated at
-    ``vlimit``, and extended ohmically from there.  Measured curves stop a
-    few millivolts above the gap, while the response function has to be
-    evaluated out to tens of gap voltages, so that extension is what makes
-    measured data usable at all.
+    zero, or extend far past the gap: it is cleaned and continued ohmically
+    beyond the last measured point.  Measured curves stop a few millivolts
+    above the gap, while the response function has to be evaluated out to
+    tens of gap voltages, so that continuation is what makes measured data
+    usable at all.
+
+    The continuation has slope one (that is what normalizing by ``Rn``
+    means) and an offset ``i - v`` fitted over the top tenth of the measured
+    range.  The tail matters more than it looks: the Kramers-Kronig
+    transform weights it logarithmically, and on a real junction the offset
+    keeps drifting well above two gap voltages, so cutting the curve at 1.8
+    (QMix's rule, and this class's former default) instead of using a sweep
+    that reaches 3.4 shifts ``ikk`` across the whole sub-gap region by a few
+    percent of ``I_gap``.  The shift is nearly uniform, which the tunnelling
+    currents cancel, but anything reading ``ikk`` directly sees all of it.
+    Every measured point is therefore used unless ``vlimit`` says otherwise.
 
     Args:
         voltage (ndarray): Normalized DC bias voltage.
         current (ndarray): Normalized DC tunneling current.
 
     Keyword Args:
-        vlimit (float): Use the measured data up to this normalized bias
-            voltage, and extend ohmically above it.  Default is 1.8.
+        vlimit (float or None): Use the measured data only up to this
+            normalized bias voltage.  Default is None, meaning all of it.
+            Pass ``1.8`` to reproduce QMix.
         **kwargs: See :class:`RespFn`.
 
     Raises:
-        ValueError: If the data does not reach ``vlimit``.
+        ValueError: If the data does not reach ``vlimit``, or
+            :data:`VLIMIT_MIN` when ``vlimit`` is None.
 
     """
 
@@ -446,22 +464,31 @@ class RespFnFromIVData(RespFn):
 
         opts = _default_params(kwargs)
         vlimit = opts["vlimit"]
-        if voltage.max() < vlimit:
+        vtop = float(voltage.max()) if vlimit is None else float(vlimit)
+        if voltage.max() < vtop or vtop < VLIMIT_MIN:
             raise ValueError(
                 f"I-V data only reaches v={voltage.max():.2f}, but it must "
-                f"reach vlimit={vlimit}. Lower 'vlimit' or supply more data."
+                f"reach at least {VLIMIT_MIN} (vlimit={vlimit}). Supply more "
+                "data, or lower 'vlimit' if it was set."
             )
 
-        # Keep the measured curve up to vlimit, then continue with the
-        # ohmic asymptote it has reached there.
-        mask = (voltage > 0) & (voltage < vlimit)
+        # Keep the measured curve up to vtop.  Beyond it the curve is ohmic
+        # with slope one; the offset comes from a straight-line fit over the
+        # top tenth of the used range, evaluated at its end, so that one
+        # noisy last point does not set the whole tail.
+        mask = (voltage > 0) & (voltage <= vtop)
         voltage, current = voltage[mask], current[mask]
-        offset = current[-1] - voltage[-1]
+        v_end = float(voltage[-1])
+        top = voltage >= v_end - 0.1 * (v_end - voltage[0])
+        if np.count_nonzero(top) >= 2:
+            _, offset = np.polyfit(voltage[top] - v_end, current[top] - voltage[top], 1)
+        else:
+            offset = current[-1] - v_end
 
         grid = np.arange(0.0, opts["vrange"] + opts["dv"] / 2, opts["dv"])
         resampled = np.interp(grid, voltage, current)
-        beyond = grid >= voltage[-1]
-        resampled[beyond] = grid[beyond] + offset
+        beyond = grid > v_end
+        resampled[beyond] = grid[beyond] + float(offset)
 
         super().__init__(grid, resampled, **kwargs)
 

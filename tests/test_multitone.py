@@ -626,3 +626,21 @@ def test_harmonic_balance_solves_many_tone_circuits(resp_poly, num_f):
     )
     assert vj.shape == (num_f + 1, 2, 21)
     qpmix.check_hb_error(vj, cct, resp_poly, num_b=5, stop_rerror=1e-2)
+
+
+def test_grid_truncation_warns_when_num_b_is_too_small_for_the_drive(resp_poly):
+    """On the grid the truncation is on the total offset num_k, so the test
+    is the summed spectral spread of every tone against it."""
+    import warnings
+
+    from qpmix.phase_factor import DriveLevelWarning
+
+    cct = _circuit(2, npts=5)
+    vj = cct.initialize_vj()
+    vj[1, 1] = 0.6  # alpha 2 on tone 1
+    vj[2, 1] = 0.1
+    with pytest.warns(DriveLevelWarning, match="num_k"):
+        qtcurrent_grid(vj, cct, resp_poly, 0.0, num_b=1, verbose=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DriveLevelWarning)
+        qtcurrent_grid(vj, cct, resp_poly, 0.0, num_b=12, verbose=False)

@@ -49,6 +49,7 @@ Examples:
 from __future__ import annotations
 
 import itertools
+import warnings
 from timeit import default_timer as timer
 
 import numpy as np
@@ -57,7 +58,13 @@ from scipy.fft import fftn, ifftn, next_fast_len
 from qpmix import _kernels
 from qpmix._backend import JIT_ENABLED
 from qpmix._respmat import build_resp_matrix
-from qpmix.phase_factor import _as_nb_tuple, calculate_phase_factor_coeff
+from qpmix.phase_factor import (
+    DRIVE_LEVEL_TOL,
+    DriveLevelWarning,
+    _as_nb_tuple,
+    calculate_phase_factor_coeff,
+    required_num_b,
+)
 
 __all__ = [
     "ROUND_FREQ",
@@ -99,6 +106,7 @@ def qtcurrent(
     verbose: bool = True,
     resp_matrix: np.ndarray | None = None,
     method: str = "auto",
+    check_drive_level: bool = True,
     **grid_kwargs,
 ) -> np.ndarray:
     """Calculate the quasiparticle tunneling current.
@@ -132,7 +140,13 @@ def qtcurrent(
             engine in :mod:`qpmix.multitone`, which is the only option
             above four tones.  ``"auto"`` uses the grid engine when there
             are more than four tones and picks between ``"direct"`` and
-            ``"fft"`` otherwise.  Default is ``"auto"``.
+            ``"fft"`` otherwise.  Passing an explicit ``grid`` with
+            ``"auto"`` also selects the grid engine.  Default is ``"auto"``.
+        check_drive_level (bool, optional): Issue a
+            :class:`qpmix.phase_factor.DriveLevelWarning` when ``num_b``
+            drops more than :data:`qpmix.phase_factor.DRIVE_LEVEL_TOL` of
+            the phase-factor weight for some tone, i.e. when it is too small
+            for the drive level ``vj`` implies.  Default is True.
         **grid_kwargs: Forwarded to
             :func:`qpmix.multitone.qtcurrent_grid` when the grid engine is
             used (``grid``, ``num_theta``).
@@ -155,7 +169,10 @@ def qtcurrent(
     if freq[1:].min() <= 0.0:
         raise ValueError("All tone frequencies must be > 0.")
 
-    if method == "grid" or (method == "auto" and num_f > MAX_DIRECT_TONES):
+    explicit_grid = grid_kwargs.get("grid") is not None
+    if method == "grid" or (
+        method == "auto" and (explicit_grid or num_f > MAX_DIRECT_TONES)
+    ):
         from qpmix.multitone import qtcurrent_grid
 
         return qtcurrent_grid(
@@ -166,6 +183,7 @@ def qtcurrent(
             num_b=num_b,
             verbose=verbose,
             resp_matrix=resp_matrix,
+            check_drive_level=check_drive_level,
             **grid_kwargs,
         )
     if grid_kwargs:
@@ -183,6 +201,8 @@ def qtcurrent(
     freq_is_list = np.ndim(freq_list) > 0
     freq_out = np.atleast_1d(np.asarray(freq_list, dtype=float)).round(ROUND_FREQ)
     nb_list = _as_nb_tuple(num_b, num_f)
+    if check_drive_level:
+        _check_drive_level(vj, freq, num_f, num_p, nb_list)
 
     if verbose:
         print("Calculating tunneling current...")
@@ -252,7 +272,9 @@ def interpolate_respfn(
         or ``(2*num_k+1, npts)`` for the grid engine.
 
     """
-    if method == "grid" or (method == "auto" and cct.num_f > MAX_DIRECT_TONES):
+    if method == "grid" or (
+        method == "auto" and (grid is not None or cct.num_f > MAX_DIRECT_TONES)
+    ):
         from qpmix.multitone import ToneGrid, interpolate_respfn_grid
 
         if grid is None:
@@ -266,6 +288,35 @@ def interpolate_respfn(
         )
     nb_list = _as_nb_tuple(num_b, cct.num_f)
     return build_resp_matrix(resp, cct.vb, cct.freq, nb_list)
+
+
+def _check_drive_level(vj, freq, num_f, num_p, nb_list) -> None:
+    """Warn when a tone's summation limit is too small for its drive level.
+
+    Args:
+        vj (ndarray): Junction voltage.
+        freq (ndarray): Normalized frequencies.
+        num_f (int): Number of tones.
+        num_p (int): Number of harmonics.
+        nb_list (tuple): Summation limit per tone.
+
+    """
+    need = required_num_b(vj, freq, num_f, num_p, tol=DRIVE_LEVEL_TOL)
+    short = [
+        f"tone {f}: num_b={have}, needs {want}"
+        for f, (have, want) in enumerate(zip(nb_list, need, strict=True), start=1)
+        if have < want
+    ]
+    if short:
+        warnings.warn(
+            "num_b is below the realised drive level ("
+            + "; ".join(short)
+            + f"): more than {DRIVE_LEVEL_TOL:g} of the phase-factor weight is "
+            "dropped. Raise num_b, or check it with "
+            "qpmix.phase_factor.required_num_b.",
+            DriveLevelWarning,
+            stacklevel=3,
+        )
 
 
 # -- index bookkeeping -------------------------------------------------

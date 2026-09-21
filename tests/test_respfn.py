@@ -213,3 +213,26 @@ def test_verbose_output_mentions_the_table(capsys):
 def test_perfect_verbose_reports_the_analytic_path(capsys):
     RespFnPerfect(verbose=True)
     assert "analytic" in capsys.readouterr().out
+
+
+def test_from_iv_data_uses_the_whole_measured_tail_by_default():
+    """The offset i - v of a real junction keeps drifting above the gap, and
+    the KK transform weights the tail logarithmically: cutting the data at
+    1.8 (QMix's rule, and the old default) biases ikk across the sub-gap
+    region.  Using the sweep out to 3.5 gets much closer to the answer from
+    the full curve, and the DC curve below the cut is untouched."""
+
+    def drifting(v):
+        return iv.polynomial(v, 30) - 0.1 * v**2 / (1 + v**2)
+
+    v_full = np.linspace(0, 35, 7001)
+    ref = RespFn(v_full, drifting(v_full), verbose=False)
+    v = np.linspace(0, 3.5, 3501)
+    full = RespFnFromIVData(v, drifting(v), verbose=False)
+    cut = RespFnFromIVData(v, drifting(v), verbose=False, vlimit=1.8)
+    check = np.linspace(0.3, 1.5, 121)
+    err_full = np.abs(full.ikk(check) - ref.ikk(check)).max()
+    err_cut = np.abs(cut.ikk(check) - ref.ikk(check)).max()
+    assert err_cut > 3e-3
+    assert err_full < err_cut / 2
+    assert np.abs(full.idc(check) - cut.idc(check)).max() < 1e-8

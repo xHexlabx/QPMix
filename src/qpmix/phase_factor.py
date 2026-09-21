@@ -78,8 +78,12 @@ from scipy.special import jv as bessel
 from qpmix._backend import JIT_ENABLED, njit, prange
 
 __all__ = [
+    "DRIVE_LEVEL_TOL",
+    "DriveLevelWarning",
+    "bessel_orders",
     "calculate_phase_factor_coeff",
     "choose_num_theta",
+    "required_num_b",
 ]
 
 #: Headroom multiplier on the drive level when sizing the FFT.  The
@@ -178,6 +182,77 @@ def drive_level(
     for f in range(1, num_f + 1):
         alpha[f, 1:] = np.abs(vj[f, 1:]) / (p_idx[:, None] * freq[f])
     return alpha, np.angle(vj)
+
+
+class DriveLevelWarning(UserWarning):
+    """The Bessel summation limit does not cover the realised drive level."""
+
+
+#: Largest fraction of the phase-factor weight that a summation limit may
+#: drop before :func:`qpmix.qtcurrent.qtcurrent` and
+#: :func:`qpmix.harmonic_balance.harmonic_balance` issue a
+#: :class:`DriveLevelWarning`.
+DRIVE_LEVEL_TOL = 1e-6
+
+
+def bessel_orders(alpha: float, tol: float = 1e-9) -> int:
+    """Smallest ``b`` such that the weight outside ``|n| <= b`` is below ``tol``.
+
+    ``sum_n J_n(alpha)^2 = 1``, so ``1 - sum_{|n| <= b} J_n(alpha)^2`` is
+    exactly the fraction of the phase-factor weight that a summation limit
+    of ``b`` throws away for one harmonic at drive level ``alpha``.
+
+    Args:
+        alpha (float): Drive level.
+        tol (float, optional): Acceptable dropped weight.  Default is 1e-9.
+
+    Returns:
+        int: The summation limit.
+
+    """
+    alpha = abs(float(alpha))
+    if not np.isfinite(alpha):
+        raise ValueError("The drive level must be finite.")
+    b = int(np.ceil(alpha))  # J_n(alpha) only starts to decay once n > alpha
+    while 1.0 - float(np.sum(bessel(np.arange(-b, b + 1), alpha) ** 2)) > tol:
+        b += 1
+    return b
+
+
+def required_num_b(
+    vj: np.ndarray, freq: np.ndarray, num_f: int, num_p: int, tol: float = 1e-9
+) -> tuple[int, ...]:
+    """Per-tone summation limit that covers the realised drive levels.
+
+    Harmonic ``p`` of a tone spreads the spectrum by ``p`` steps per Bessel
+    order, so its requirement is ``p * bessel_orders(alpha[f, p])``; the
+    maximum over harmonics and bias points is returned for each tone.  Use
+    it to choose ``num_b`` from a solved junction voltage instead of
+    guessing: the IF tone of a mixer has a tiny photon voltage, so a small
+    induced IF voltage is already a large drive level.
+
+    Args:
+        vj (ndarray): Junction voltage, shape ``(num_f + 1, num_p + 1, npts)``.
+        freq (ndarray): Normalized frequencies, shape ``(num_f + 1,)``.
+        num_f (int): Number of tones.
+        num_p (int): Number of harmonics.
+        tol (float, optional): Acceptable dropped weight per harmonic.
+            Default is 1e-9.
+
+    Returns:
+        tuple: One summation limit per tone.
+
+    """
+    alpha, _ = drive_level(vj, freq, num_f, num_p)
+    need = []
+    for f in range(1, num_f + 1):
+        b_f = 0
+        for p in range(1, num_p + 1):
+            finite = alpha[f, p][np.isfinite(alpha[f, p])]
+            if finite.size:
+                b_f = max(b_f, p * bessel_orders(float(finite.max()), tol))
+        need.append(b_f)
+    return tuple(need)
 
 
 @njit(parallel=True)
